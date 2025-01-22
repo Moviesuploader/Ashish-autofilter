@@ -62,8 +62,8 @@ HOW_TO_VERIFY = environ.get('HOW_TO_VERIFY', 'https://t.me/beautyofthemovie/6') 
 
 # Shortner 
 IS_SHORTLINK = bool(environ.get('IS_SHORTLINK', False))
-SHORTLINK_URL = environ.get('SHORTLINK_URL', 'shortxlinks.com')
-SHORTLINK_API = environ.get('SHORTLINK_API', 'b410d49d996fecd0a3560d38c316c93c4b0dfa86')
+SHORTLINK_URL = environ.get('SHORTLINK_URL', 'anylinks.in')
+SHORTLINK_API = environ.get('SHORTLINK_API', '4b9826c7f17e89977b3b52f59d37ead07c29e8b5')
 TUTORIAL = environ.get('TUTORIAL', 'https://t.me/beautyofthemovie/6') # Tutorial video link for opening shortlink website 
 IS_TUTORIAL = bool(environ.get('IS_TUTORIAL', False))
 
