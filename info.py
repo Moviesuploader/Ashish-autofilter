@@ -48,7 +48,7 @@ DATABASE_NAME = environ.get('DATABASE_NAME', "cluster")
 COLLECTION_NAME = environ.get('COLLECTION_NAME', 'Telegram_files')
 
 # index movie Notification & update channel 
-DEENDAYAL_MOVIE_UPDATE_NOTIFICATION = bool(environ.get('DEENDAYAL_MOVIE_UPDATE_NOTIFICATION', False))  # NOTIFICATION On ( True ) / Off ( False )
+DEENDAYAL_MOVIE_UPDATE_NOTIFICATION = bool(environ.get('DEENDAYAL_MOVIE_UPDATE_NOTIFICATION', True))  # NOTIFICATION On ( True ) / Off ( False )
 DEENDAYAL_IMAGE_FETCH = bool(environ.get('DEENDAYAL_IMAGE_FETCH', True))  #  On ( True ) / Off ( False )
 CAPTION_LANGUAGES = ["Bhojpuri", "Hindi", "Bengali", "Tamil", "English", "Bangla", "Telugu", "Malayalam", "Kannada", "Marathi", "Punjabi", "Bengoli", "Gujrati", "Korean", "Gujarati", "Spanish", "French", "German", "Chinese", "Arabic", "Portuguese", "Russian", "Japanese", "Odia", "Assamese", "Urdu"]
 
