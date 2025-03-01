@@ -191,9 +191,9 @@ Nᴀᴍᴇ - {}
 
 <b>🎉 𝑺𝒆𝒍𝒆𝒄𝒕 𝒀𝒐𝒖𝒓 𝑫𝒐𝒏𝒂𝒕𝒆 𝑴𝒆𝒕𝒉𝒐𝒅 👇</b>
 
-➢ QR Cᴏᴅᴇ : <a href='{}'>𝑪𝑳𝑰𝑪𝑲 𝑯𝑬𝑹𝑬 𝑻𝑶 𝑺𝑪𝑨𝑵</a>
+➢ QR Cᴏᴅᴇ : <a href='https://telegra.ph/file/584cd1420a1aaacd92e22.jpg'>𝑪𝑳𝑰𝑪𝑲 𝑯𝑬𝑹𝑬 𝑻𝑶 𝑺𝑪𝑨𝑵</a>
 
-➢ Uᴘɪ Iᴅ : <code>{}</code>
+➢ Uᴘɪ Iᴅ : <code>2001aashish@axisb</code>
 
 ‼️ 𝑴𝒖𝒔𝒕 𝑺𝒆𝒏𝒅 𝑺𝒄𝒓𝒆𝒆𝒏𝒔𝒉𝒐𝒕 𝑨𝒇𝒕𝒆𝒓 𝑫𝒐𝒏𝒂𝒕𝒆.</b>"""
     
@@ -271,7 +271,7 @@ Nᴀᴍᴇ : {}
 
 Mᴇꜱꜱᴀɢᴇ : <b>{}</b>"""
     
-    CAPTION = """<b><a href="https://t.me/Deendayal_dhakad">{file_name}</a></b>\n\n<b>⚜️ Powered By : <a href=https://t.me/Deendayal_dhakad>[Deendayal_Dhakad]</a></b>"""
+    CAPTION = """<b><a href="https://t.me/btmx_zone">{file_caption}</a></b>\n\n<b>⚜️ Powered By : <a href=https://t.me/btmx_zone>[BTMX_ZONE™]</a></b>"""
 
     IMDB_TEMPLATE_TXT = """
 <b>🏷 Title</b>: <a href={url}>{title}</a>
@@ -366,7 +366,7 @@ Requested by : {message.from_user.mention}</b>"""
 ○ ᴍᴜʟᴛɪ-ᴘʟᴀʏᴇʀ sᴛʀᴇᴀᴍɪɴɢ ʟɪɴᴋs
 ○ ᴀᴅ-ғʀᴇᴇ ᴇxᴘᴇʀɪᴇɴᴄᴇ
 
-👨‍💻 ᴄᴏɴᴛᴀᴄᴛ ᴛʜᴇ <a href='https://t.me/dreamcinezone'>Owner</a> ᴛᴏ ɢᴇᴛ ʏᴏᴜʀ ᴛʀɪᴀʟ.
+👨‍💻 ᴄᴏɴᴛᴀᴄᴛ ᴛʜᴇ <a href='https://t.me/Ashishofficials'>Owner</a> ᴛᴏ ɢᴇᴛ ʏᴏᴜʀ ᴛʀɪᴀʟ.
 
 ➛ ᴜꜱᴇ /plan ᴛᴏ ꜱᴇᴇ ᴀʟʟ ᴏᴜʀ ᴘʟᴀɴꜱ ᴀᴛ ᴏɴᴄᴇ.
 ➛ ᴄʜᴇᴄᴋ ʏᴏᴜʀ ᴀᴄᴛɪᴠᴇ ᴘʟᴀɴ ʙʏ ᴜꜱɪɴɢ : /myplan</b>"""
@@ -422,7 +422,7 @@ Requested by : {message.from_user.mention}</b>"""
 ⏰ ᴄᴜꜱᴛᴏᴍɪꜱᴇᴅ ᴅᴀʏꜱ
 💸 ᴀᴄᴄᴏʀᴅɪɴɢ ᴛᴏ ᴅᴀʏꜱ ʏᴏᴜ ᴄʜᴏᴏꜱᴇ
 
-🏆 ɪꜰ ʏᴏᴜ ᴡᴀɴᴛ ᴀ ɴᴇᴡ ᴘʟᴀɴ ᴀᴘᴀʀᴛ ꜰʀᴏᴍ ᴛʜᴇ ɢɪᴠᴇɴ ᴘʟᴀɴ, ᴛʜᴇɴ ʏᴏᴜ ᴄᴀɴ ᴛᴀʟᴋ ᴛᴏ ᴏᴜʀ <a href='https://t.me/dreamcinezone'>ᴏᴡɴᴇʀ</a> ᴅɪʀᴇᴄᴛʟʏ ʙʏ ᴄʟɪᴄᴋɪɴɢ ᴏɴ ᴛʜᴇ ᴄᴏɴᴛᴀᴄᴛ ʙᴜᴛᴛᴏɴ ɢɪᴠᴇɴ ʙᴇʟᴏᴡ.
+🏆 ɪꜰ ʏᴏᴜ ᴡᴀɴᴛ ᴀ ɴᴇᴡ ᴘʟᴀɴ ᴀᴘᴀʀᴛ ꜰʀᴏᴍ ᴛʜᴇ ɢɪᴠᴇɴ ᴘʟᴀɴ, ᴛʜᴇɴ ʏᴏᴜ ᴄᴀɴ ᴛᴀʟᴋ ᴛᴏ ᴏᴜʀ <a href='https://t.me/Ashishofficials'>ᴏᴡɴᴇʀ</a> ᴅɪʀᴇᴄᴛʟʏ ʙʏ ᴄʟɪᴄᴋɪɴɢ ᴏɴ ᴛʜᴇ ᴄᴏɴᴛᴀᴄᴛ ʙᴜᴛᴛᴏɴ ɢɪᴠᴇɴ ʙᴇʟᴏᴡ.
     
 👨‍💻 ᴄᴏɴᴛᴀᴄᴛ ᴛʜᴇ ᴏᴡɴᴇʀ ᴛᴏ ɢᴇᴛ ʏᴏᴜʀ ᴏᴛʜᴇʀ ᴘʟᴀɴ.
 
@@ -474,7 +474,7 @@ Requested by : {message.from_user.mention}</b>"""
 
     SOURCE_TXT ="""<b>ՏOᑌᖇᑕᗴ ᑕOᗪᗴ : 👇 </b>
 
- ꜱᴏᴜʀᴄᴇ ᴄᴏᴅᴇ ʜᴇʀᴇ ◉› :<a href=https://github.com/Deendayal403/Deendayal_dhakad.git>Deendayal_Botz</a>\n """
+ ꜱᴏᴜʀᴄᴇ ᴄᴏᴅᴇ ʜᴇʀᴇ ◉› :<a href=https://t.me/btmx_zone>BTMX_ZONE™</a>\n """
 
     EXTRAF_TXT =""" <b> ʜᴇʀᴇ ɪꜱ ᴍʏ ᴇxᴛʀᴀ ꜰᴇᴀᴛᴜʀᴇꜱ </b>"""
 
