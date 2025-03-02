@@ -1635,7 +1635,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             lazy_stream = f"{URL}watch/{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
             lazy_download = f"{URL}{str(log_msg.id)}/{quote_plus(get_name(log_msg))}?hash={get_hash(log_msg)}"
 
-            xo = await query.message.reply_text(f'💘')
+            xo = await query.message.reply_sticker("CAACAgUAAxkBAAJJrWfDy2L02PdFdrkjOhkv7qBsie2VAALgCwACtzs4VKOFR-XRmjryHgQ")
             await asyncio.sleep(1)
             await xo.delete()
 
