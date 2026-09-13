@@ -77,19 +77,19 @@ async def ensure_payment_indexes():
     await PAYMENTS.create_index(
         [("tx_hash", ASCENDING)],
         unique=True,
-        partialFilterExpression={"tx_hash": {"$exists": True, "$nin": [None, ""]}},
+        partialFilterExpression={"tx_hash": {"$type": "string", "$gt": ""}},
         name="uniq_crypto_tx_hash",
     )
     await PAYMENTS.create_index(
         [("payment_type", ASCENDING), ("utr", ASCENDING)],
         unique=True,
-        partialFilterExpression={"payment_type": "upi", "utr": {"$exists": True, "$nin": [None, ""]}},
+        partialFilterExpression={"payment_type": "upi", "utr": {"$type": "string", "$gt": ""}},
         name="uniq_upi_utr",
     )
     await PAYMENTS.create_index(
         [("telegram_payment_charge_id", ASCENDING)],
         unique=True,
-        partialFilterExpression={"telegram_payment_charge_id": {"$exists": True, "$nin": [None, ""]}},
+        partialFilterExpression={"telegram_payment_charge_id": {"$type": "string", "$gt": ""}},
         name="uniq_stars_charge_id",
     )
 
