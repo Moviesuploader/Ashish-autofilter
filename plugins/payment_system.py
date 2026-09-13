@@ -715,7 +715,7 @@ async def admin_payment_action(client, query, ref, approve):
     except Exception:pass
     await query.answer("Premium activated successfully.")
 
-@Client.on_message(filters.private & filters.text & ~filters.command)
+@Client.on_message(filters.private & filters.text & ~filters.command())
 async def premium_payment_text_handler(client, message):
     # Only consume text when this user has a payment waiting for a UTR.
     p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_utr"},sort=[("created_at",-1)])
