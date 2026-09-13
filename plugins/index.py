@@ -4,7 +4,8 @@ from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait
 from pyrogram.errors.exceptions.bad_request_400 import ChannelInvalid, ChatAdminRequired, UsernameInvalid, UsernameNotModified
 from info import ADMINS, INDEX_REQ_CHANNEL as LOG_CHANNEL
-from database.ia_filterdb import save_file
+from database.admin_settings_db import get_index_skip, set_index_skip, get_setting, set_setting
+from database.ia_filterdb import save_file, send_msg, Media, Media2, unpack_new_file_id
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from utils import temp
 import re
@@ -45,6 +46,9 @@ async def index_files(bot, query):
         chat = int(chat)
     except:
         chat = chat
+    # Prefer the saved per-channel checkpoint so re-indexing does not start from zero.
+    saved_skip = await get_index_skip(chat, temp.CURRENT)
+    temp.CURRENT = int(saved_skip)
     await index_files_to_db(int(lst_msg_id), chat, msg, bot)
 
 
@@ -116,8 +120,9 @@ async def set_skip_number(bot, message):
             skip = int(skip)
         except:
             return await message.reply("Skip number should be an integer.")
-        await message.reply(f"Successfully set SKIP number as {skip}")
+        await message.reply(f"Successfully set SKIP number as {skip}\n\nThis becomes the default checkpoint until the next successful channel indexing run.")
         temp.CURRENT = int(skip)
+        await set_setting("index_skip_default", int(skip), message.from_user.id)
     else:
         await message.reply("Give me a skip number")
 
@@ -159,7 +164,21 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                     continue
                 media.file_type = message.media.value
                 media.caption = message.caption
-                aynav, vnay = await save_file(bot, media)
+                # Publish a per-movie processing card. save_file will publish the final
+                # uploaded card after the file is committed; this status is informational.
+                pending_update = None
+                try:
+                    raw_id, _ = unpack_new_file_id(media.file_id)
+                    duplicate_exists = bool(await Media.find_one({"file_id": raw_id}) or await Media2.find_one({"file_id": raw_id}))
+                except Exception:
+                    duplicate_exists = False
+                if not duplicate_exists:
+                    try:
+                        if await get_setting("movie_updates_enabled", True) and await get_setting("movie_update_channel", None):
+                            pending_update = await send_msg(bot, media.file_name, media.caption, media.file_size, status="⏳ <b>Indexing / Uploading...</b>")
+                    except Exception:
+                        pending_update = None
+                aynav, vnay = await save_file(bot, media, update_message=pending_update)
                 if aynav:
                     total_files += 1
                 elif vnay == 0:
@@ -170,5 +189,7 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
             logger.exception(e)
             await msg.edit(f'Error: {e}')
         else:
-            await msg.edit(f'Succesfully saved <code>{total_files}</code> to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>')
+            await set_index_skip(chat, int(lst_msg_id))
+            temp.CURRENT = int(lst_msg_id)
+            await msg.edit(f'Succesfully saved <code>{total_files}</code> to dataBase!\nDuplicate Files Skipped: <code>{duplicate}</code>\nDeleted Messages Skipped: <code>{deleted}</code>\nNon-Media messages skipped: <code>{no_media + unsupported}</code>(Unsupported Media - `{unsupported}` )\nErrors Occurred: <code>{errors}</code>\n\n📌 <b>Next index checkpoint:</b> <code>{lst_msg_id}</code>')
 

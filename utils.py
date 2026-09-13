@@ -16,6 +16,7 @@ from datetime import datetime, date, time, timedelta
 import string
 from typing import List
 from database.users_chats_db import db
+from database.admin_settings_db import get_setting
 from bs4 import BeautifulSoup
 import requests
 import aiohttp
@@ -60,19 +61,26 @@ class temp(object):
 
 
 async def is_req_subscribed(bot, query):
+    if not await get_setting("auth_enabled", True):
+        return True
     if await db.find_join_req(query.from_user.id):
         return True
-    try:
-        user = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
-    except UserNotParticipant:
-        pass
-    except Exception as e:
-        logger.exception(e)
-    else:
-        if user.status != enums.ChatMemberStatus.BANNED:
-            return True
-
-    return False
+    channels = await get_setting("auth_channels", None)
+    if channels is None:
+        channels = [AUTH_CHANNEL] if AUTH_CHANNEL else []
+    elif isinstance(channels, int):
+        channels = [channels]
+    for channel in channels:
+        try:
+            user = await bot.get_chat_member(int(channel), query.from_user.id)
+            if user.status == enums.ChatMemberStatus.BANNED:
+                return False
+        except UserNotParticipant:
+            return False
+        except Exception as e:
+            logger.exception(e)
+            return False
+    return bool(channels)
 
 async def is_subscribed(bot, query, channels):
     btn = []
@@ -503,6 +511,8 @@ def get_readable_time(seconds):
     return ' '.join(result)  
 
 async def get_shortlink(chat_id, link):
+    if not await get_setting("shortener_enabled", True):
+        return link
     settings = await get_settings(chat_id) #fetching settings for group
     if 'shortlink' in settings.keys():
         URL = settings['shortlink']

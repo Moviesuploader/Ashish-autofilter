@@ -5,12 +5,22 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram import Client, filters, enums
 from database.users_chats_db import db
 from info import ADMINS, GRP_LNK
+from Deendayal_botz.Bot import DeendayalBot
 
         
-@Client.on_message(filters.command("broadcast") & filters.user(ADMINS) & filters.reply)
+@Client.on_message(filters.command("broadcast") & filters.user(ADMINS))
 async def broadcast(bot, message):
-    users = await db.get_all_users()
+    # Broadcast can be sent by replying to any message, or directly as /broadcast <text>.
     b_msg = message.reply_to_message
+    direct_text = message.text.split(None, 1)[1].strip() if message.text and len(message.text.split(None, 1)) > 1 else None
+    if not b_msg and not direct_text:
+        await message.reply_text(
+            "📢 <b>Broadcast Help</b>\n\n"
+            "Reply to any message and send <code>/broadcast</code> to broadcast it.\n"
+            "Or send text directly like: <code>/broadcast Your message</code>"
+        )
+        return
+    users = await db.get_all_users()
     sts = await message.reply_text('Bʀᴏᴀᴅᴄᴀsᴛɪɴɢ Yᴏᴜʀ Mᴇssᴀɢᴇs...')
     start_time = time.time()
     total_users = await db.total_users_count()
@@ -21,7 +31,7 @@ async def broadcast(bot, message):
     success = 0
     btn = InlineKeyboardMarkup([[InlineKeyboardButton(" Sᴇᴀʀᴄʜ ʜᴇʀᴇ", url=GRP_LNK)]])
     async for user in users:
-        pti, sh = await broadcast_messages(int(user['id']), b_msg, reply_markup=btn)
+        pti, sh = await broadcast_messages(int(user['id']), b_msg, direct_text=direct_text, reply_markup=btn)
         if pti:
             success += 1
         elif pti == False:
@@ -67,7 +77,7 @@ async def remove_junkuser__db(bot, message):
     await bot.send_message(message.chat.id, f"Completed:\nCompleted in {time_taken} seconds.\n\nTotal Users {total_users}\nCompleted: {done} / {total_users}\nBlocked: {blocked}\nDeleted: {deleted}")
 
 
-@Client.on_message(filters.command("grp_broadcast") & filters.user(ADMINS) & filters.reply)
+@Client.on_message(filters.command("grp_broadcast") & filters.user(ADMINS))
 async def broadcast_group(bot, message):
     groups = await db.get_all_chats()
     if not groups:
@@ -76,6 +86,10 @@ async def broadcast_group(bot, message):
         await grp.delete()
         return
     b_msg = message.reply_to_message
+    direct_text = message.text.split(None, 1)[1].strip() if message.text and len(message.text.split(None, 1)) > 1 else None
+    if not b_msg and not direct_text:
+        await message.reply_text("📢 Reply to a message and use <code>/grp_broadcast</code>, or use <code>/grp_broadcast Your message</code>.")
+        return
     sts = await message.reply_text(text='Bʀᴏᴀᴅᴄᴀsᴛɪɴɢ ʏᴏᴜʀ ᴍᴇssᴀɢᴇs Tᴏ Gʀᴏᴜᴘs...')
     start_time = time.time()
     total_groups = await db.total_chat_count()
@@ -84,7 +98,7 @@ async def broadcast_group(bot, message):
     success = 0
     deleted = 0
     async for group in groups:
-        pti, sh, ex = await broadcast_messages_group(int(group['id']), b_msg)
+        pti, sh, ex = await broadcast_messages_group(int(group['id']), b_msg, direct_text=direct_text)
         if pti == True:
             if sh == "Succes":
                 success += 1
@@ -148,13 +162,16 @@ async def junk_clear_group(bot, message):
         await message.reply_document('junk.txt', caption=f"Completed:\nCompleted in {time_taken} seconds.\n\nTotal Groups {total_groups}\nCompleted: {done} / {total_groups}\nDeleted: {deleted}")
         os.remove("junk.txt")
 
-async def broadcast_messages_group(chat_id, message):
+async def broadcast_messages_group(chat_id, message, direct_text=None):
     try:
-        await message.copy(chat_id=chat_id)
+        if message is not None:
+            await message.copy(chat_id=chat_id)
+        else:
+            await DeendayalBot.send_message(chat_id=chat_id, text=direct_text)
         return True, "Succes", 'mm'
     except FloodWait as e:
         await asyncio.sleep(e.value)
-        return await broadcast_messages_group(chat_id, message)
+        return await broadcast_messages_group(chat_id, message, direct_text=direct_text)
     except Exception as e:
         await db.delete_chat(int(chat_id))       
         logging.info(f"{chat_id} - PeerIdInvalid")
@@ -196,13 +213,16 @@ async def clear_junk(user_id, message):
     except Exception as e:
         return False, "Error"
 
-async def broadcast_messages(user_id, message, reply_markup=None):
+async def broadcast_messages(user_id, message, direct_text=None, reply_markup=None):
     try:
-        await message.copy(chat_id=user_id,reply_markup=reply_markup)
+        if message is not None:
+            await message.copy(chat_id=user_id, reply_markup=reply_markup)
+        else:
+            await DeendayalBot.send_message(chat_id=user_id, text=direct_text, reply_markup=reply_markup)
         return True, "Success"
     except FloodWait as e:
         await asyncio.sleep(e.value)
-        return await broadcast_messages(user_id, message,reply_markup=reply_markup)
+        return await broadcast_messages(user_id, message, direct_text=direct_text, reply_markup=reply_markup)
     except InputUserDeactivated:
         await db.delete_user(int(user_id))
         logging.info(f"{user_id}-Removed from Database, since deleted account.")

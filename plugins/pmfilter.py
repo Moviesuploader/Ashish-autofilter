@@ -7,7 +7,8 @@ import pytz
 from datetime import datetime, timedelta, date, time
 lock = asyncio.Lock()
 from database.users_chats_db import db
-from database.refer import referdb
+from database.referral_db import get_dashboard, history, activation_history, redeem_points, qualify_referral
+from database.admin_settings_db import get_setting
 from pyrogram.errors.exceptions.bad_request_400 import MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from Script import script
 import pyrogram
@@ -34,6 +35,8 @@ from database.gfilters_mdb import (
 )
 import logging
 from urllib.parse import quote_plus
+from .payment_system import plan_keyboard, show_plan_checkout, start_upi, start_crypto, start_crypto_order, start_stars, admin_payment_action, verify_crypto, _finish_crypto
+from .request_system import send_no_result_request, handle_request_callback
 from Deendayal_botz.util.file_properties import get_name, get_hash, get_media_file_size
 from database.config_db import mdb
 logger = logging.getLogger(__name__)
@@ -75,6 +78,8 @@ def get_shortlink_sync(url):
         return url
 
 async def get_shortlink(url):
+    if not await get_setting("shortener_enabled", True):
+        return url
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, get_shortlink_sync, url)
 
@@ -111,6 +116,10 @@ async def pm_text(bot, message):
     content = message.text
     user = message.from_user.first_name
     user_id = message.from_user.id
+    if await handle_user_request_text(bot, message):
+        return
+    if await handle_admin_reply_text(bot, message):
+        return
     # Quick-menu labels are navigation, not movie search queries.
     if content.strip() in {
         "🔎 Search Movies", "🆕 Latest Movies", "⭐ Premium",
@@ -143,23 +152,63 @@ async def pm_text(bot, message):
 
 @Client.on_callback_query(filters.regex(r"^reffff"))
 async def refercall(bot, query):
-    btn = [[
-        InlineKeyboardButton('invite link', url=f'https://telegram.me/share/url?url=https://t.me/{bot.me.username}?start=reff_{query.from_user.id}&text=Hello%21%20Experience%20a%20bot%20that%20offers%20a%20vast%20library%20of%20unlimited%20movies%20and%20series.%20%F0%9F%98%83'),
-        InlineKeyboardButton(f'⏳ {referdb.get_refer_points(query.from_user.id)}', callback_data='ref_point'),
-        InlineKeyboardButton('Back', callback_data='premium_info')
-    ]]
-    reply_markup = InlineKeyboardMarkup(btn)
-    await bot.edit_message_media(
-            query.message.chat.id, 
-            query.message.id, 
-            InputMediaPhoto("https://graph.org/file/1a2e64aee3d4d10edd930.jpg")
-        )
-    await query.message.edit_text(
-        text=f'Hay Your refer link:\n\nhttps://t.me/{bot.me.username}?start=reff_{query.from_user.id}\n\nShare this link with your friends, Each time they join,  you will get 10 refferal points and after 100 points you will get 1 month premium subscription.',
-        reply_markup=reply_markup,
-        parse_mode=enums.ParseMode.HTML
-        )
+    me = query.from_user
+    d = await get_dashboard(me.id)
+    reward = int(await get_setting("referral_reward_points", 5))
+    threshold = int(await get_setting("referral_redeem_points", 20))
+    days = int(await get_setting("referral_redeem_days", 10))
+    link = f"https://t.me/{bot.me.username}?start=reff_{me.id}"
+    text = (f"🤝 <b>REFER & EARN PREMIUM</b>\n━━━━━━━━━━━━━━━━━━\n"
+            f"🎁 Reward: <b>{reward} points</b> per qualified referral\n"
+            f"👥 Successful: <b>{d['qualified']}</b>   ⏳ Pending: <b>{d['pending']}</b>\n"
+            f"💎 Total earned: <b>{d['earned']} points</b>\n"
+            f"💰 Current balance: <b>{d['points']} points</b>\n\n"
+            f"🎟️ <b>{threshold} points = {days} days Premium</b>\n"
+            f"⚡ Referral activates after the referred user completes a successful movie search.\n\n"
+            f"🔗 <code>{link}</code>")
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📤 Share Referral Link", url=f"https://t.me/share/url?url={quote_plus(link)}")],
+        [InlineKeyboardButton("💎 Redeem Premium", callback_data="ref_redeem"), InlineKeyboardButton("📜 History", callback_data="ref_history")],
+        [InlineKeyboardButton("⚡ Activation Logs", callback_data="ref_activations")],
+        [InlineKeyboardButton("🔙 Back", callback_data="premium_info")],
+    ])
+    try: await query.message.edit_text(text, reply_markup=kb, parse_mode=enums.ParseMode.HTML)
+    except Exception: pass
     await query.answer()
+
+@Client.on_callback_query(filters.regex(r"^ref_(redeem|history|activations)$"))
+async def referral_actions(bot, query):
+    uid = query.from_user.id
+    action = query.data.split("_",1)[1]
+    if action == "redeem":
+        ok, balance, days = await redeem_points(uid)
+        if not ok:
+            threshold = int(await get_setting("referral_redeem_points", 20))
+            return await query.answer(f"Need {threshold} points. Current balance: {balance}.", show_alert=True)
+        # Add the redeemed Premium days using the existing premium DB method.
+        user = await db.get_user(uid) or {"id": uid}
+        from datetime import datetime, timedelta
+        now = datetime.utcnow()
+        old = user.get("expiry_time")
+        base = old if old and isinstance(old, datetime) and old > now else now
+        expiry = base + timedelta(days=days)
+        await db.update_user({"id": uid, "expiry_time": expiry})
+        await query.answer(f"🎉 {days} days Premium activated from referral credits!", show_alert=True)
+        return await refercall(bot, query)
+    if action == "history":
+        docs = await history(uid)
+        lines = ["📜 <b>REFERRAL HISTORY</b>", "━━━━━━━━━━━━━━━━━━"]
+        if not docs: lines.append("No referrals yet.")
+        for d in docs[:15]:
+            status = "✅ Qualified" if d.get("status") == "qualified" else "⏳ Pending"
+            lines.append(f"• <code>{d.get('invitee_id')}</code> — {status}")
+        lines.append("\n🔙 Use the button below to return.")
+        return await query.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Referral Center", callback_data="reffff")]]), parse_mode="HTML")
+    docs = await activation_history(uid)
+    lines = ["⚡ <b>ACTIVATION HISTORY</b>", "━━━━━━━━━━━━━━━━━━"]
+    if not docs: lines.append("No activations yet.")
+    for d in docs[:15]: lines.append(f"• <code>{d.get('invitee_id')}</code> → +{d.get('points',0)} points")
+    return await query.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Referral Center", callback_data="reffff")]]), parse_mode="HTML")
 
 @Client.on_callback_query(filters.regex(r"^next"))
 async def next_page(bot, query):
@@ -354,14 +403,11 @@ async def advantage_spoll_choker(bot, query):
                 
                 if NO_RESULTS_MSG:
                     await bot.send_message(chat_id=BIN_CHANNEL, text=(script.NORSLTS.format(reqstr.id, reqstr.mention, movie)))
-                
-                # Create the button for contacting admin
-                contact_admin_button = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔰Cʟɪᴄᴋ ʜᴇʀᴇ & ʀᴇǫᴜᴇsᴛ ᴛᴏ ᴀᴅᴍɪɴ🔰", url=OWNER_LNK)]]
+                await query.message.edit(
+                    f"🔎 <b>No movie found</b>\n\nI couldn't find <b>{movie}</b> in the database.\n\n📩 You can send a request to the admin team for verification.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📩 Request This Movie", callback_data="request_start")], [InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]),
+                    parse_mode=enums.ParseMode.HTML,
                 )
-                
-                k = await query.message.edit(script.MVE_NT_FND, reply_markup=contact_admin_button)
-                await asyncio.sleep(10)
                 await k.delete()
                 
 #Qualities 
@@ -401,7 +447,7 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
         0,
         [
             InlineKeyboardButton(
-                text="⇊ ꜱᴇʟᴇᴄᴛ ǫᴜᴀʟɪᴛʏ ⇊", callback_data="ident"
+                text="ℹ️ How Quality Works", callback_data="quality_info"
             )
         ],
     )
@@ -568,7 +614,7 @@ async def languages_cb_handler(client: Client, query: CallbackQuery):
         0,
         [
             InlineKeyboardButton(
-                text="⇊ ꜱᴇʟᴇᴄᴛ ʟᴀɴɢᴜᴀɢᴇ ⇊", callback_data="ident"
+                text="ℹ️ How Language Works", callback_data="language_info"
             )
         ],
     )
@@ -718,6 +764,21 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
     #     BUTTONS[key+"2"] = search
     search = FRESH.get(key)
     BUTTONS[key] = None
+    if not search:
+        return await query.answer("⚠️ This search has expired. Please search the title again.", show_alert=True)
+    normalized = str(search).lower()
+    # If the current result is clearly a standalone movie, explain instead of
+    # presenting season buttons that have no useful action.
+    has_episode_marker = bool(re.search(r"\b(?:s\d{1,2}|season\s*\d{1,2}|s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2})\b", normalized))
+    has_series_cue = any(x in normalized for x in ("series", "web series", "tv show", "episode", "episodic"))
+    existing_files = temp.GETALL.get(key) or []
+    file_names = " ".join(str(getattr(f, "file_name", "")) for f in existing_files).lower()
+    has_season_files = bool(re.search(r"\b(?:s\d{1,2}|season\s*\d{1,2}|s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2})\b", file_names))
+    if not has_episode_marker and not has_series_cue and not has_season_files:
+        return await query.answer(
+            "🎬 This title appears to be a movie, not a series.\n\n📺 Season filters are only for episodic/TV series uploads. Use Quality, Language or the file buttons for this movie.",
+            show_alert=True,
+        )
     search = search.replace(' ', '_')
     btn = []
     for i in range(0, len(SEASONS)-1, 2):
@@ -736,7 +797,7 @@ async def seasons_cb_handler(client: Client, query: CallbackQuery):
         0,
         [
             InlineKeyboardButton(
-                text="⇊ ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ ⇊", callback_data="ident"
+                text="ℹ️ Season Guide", callback_data="season_info"
             )
         ],
     )
@@ -837,7 +898,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
             ]
         )
         btn.insert(0, [
-            InlineKeyboardButton("⭐ Premium", url=f"https://t.me/{temp.U_NAME}?start=plan"),
+            InlineKeyboardButton("⭐ Premium", url=f"https://t.me/{temp.U_NAME}?start=premium"),
             InlineKeyboardButton("📦 Send All", callback_data=f"sendfiles#{key}")
             
         ])
@@ -872,6 +933,115 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
     lazyData = query.data
+    if await get_setting("maintenance_mode", False) and query.from_user.id not in ADMINS:
+        return await query.answer("🛠️ Bot is under maintenance. Please try again shortly.", show_alert=True)
+
+    if query.data == "request_start" or query.data.startswith("req_"):
+        if await handle_request_callback(client, query):
+            return
+
+    if query.data.startswith("savecopy#"):
+        try:
+            await query.message.copy(query.from_user.id)
+            return await query.answer("💾 Saved a copy in your Telegram chat.")
+        except Exception:
+            return await query.answer("Could not save a copy. Please try again.", show_alert=True)
+
+    # --- Premium payment system ---
+    if query.data == "payplans":
+        await query.message.edit_text("💎 <b>PREMIUM PLANS</b>\n━━━━━━━━━━━━━━━━━━\n\nSelect a plan to continue:", reply_markup=plan_keyboard(), parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    if query.data.startswith("payplan_"):
+        await show_plan_checkout(client, query, query.data.split("_", 1)[1])
+        return await query.answer()
+
+    if query.data.startswith("paymethod_"):
+        await show_plan_checkout(client, query, query.data.split("_", 1)[1])
+        return await query.answer()
+
+    if query.data.startswith("payupi_"):
+        await start_upi(client, query, query.data.split("_", 1)[1])
+        return await query.answer()
+
+    if query.data.startswith("paycrypto_"):
+        await start_crypto(client, query, query.data.split("_", 1)[1])
+        return await query.answer()
+
+    if query.data.startswith("paystars_"):
+        await start_stars(client, query, query.data.split("_", 1)[1])
+        return
+
+    if query.data.startswith("paynet_"):
+        parts=query.data.split("_")
+        if len(parts) >= 3:
+            plan_key=parts[1]; network_key="_".join(parts[2:])
+            await start_crypto_order(client, query, plan_key, network_key)
+        return await query.answer()
+
+    if query.data.startswith("upisubmit_"):
+        from .payment_system import PAYMENTS
+        from bson import ObjectId
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_utr"})
+        except Exception: p=None
+        if not p:
+            return await query.answer("Payment request expired or already submitted.", show_alert=True)
+        kb=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔢 Send UTR / Reference",callback_data=f"upisendutr_{p['_id']}")],
+            [InlineKeyboardButton("📸 Send Payment Screenshot",callback_data=f"upishot_{p['_id']}")],
+            [InlineKeyboardButton("⬅️ Back to UPI",callback_data=f"payupi_{p['plan']}")],
+        ])
+        await query.message.edit_text("🧾 <b>SUBMIT PAYMENT PROOF</b>\n\nUTR dalna zaroori nahi hai. Aap <b>UTR</b> ya <b>payment screenshot</b> mein se koi ek submit kar sakte ho.\n\n📸 Screenshot mein payment success/status, exact amount aur transaction/reference details clearly visible honi chahiye.\n\n⚠️ OTP, UPI PIN ya banking password kabhi send na karein.",reply_markup=kb,parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    if query.data.startswith("upisendutr_"):
+        from .payment_system import PAYMENTS
+        from bson import ObjectId
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_utr"})
+        except Exception: p=None
+        if not p: return await query.answer("Payment request expired or already submitted.", show_alert=True)
+        await query.message.edit_text("🔢 <b>SEND UTR / REFERENCE</b>\n\nAb apne UPI app ka UTR / transaction reference number yahan message mein bhejo.\n\n⚠️ Sirf UTR bhejna hai — OTP, UPI PIN ya password kabhi nahi.",parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    if query.data.startswith("upishot_"):
+        from .payment_system import PAYMENTS
+        from bson import ObjectId
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_utr"})
+        except Exception: p=None
+        if not p: return await query.answer("Payment request expired or already submitted.", show_alert=True)
+        await query.message.edit_text("📸 <b>SEND PAYMENT SCREENSHOT</b>\n\nAb apne kisi bhi UPI app/platform se kiye payment ka clear screenshot yahan bhejo.\n\nScreenshot mein <b>Payment Success, exact amount aur transaction/reference details</b> visible honi chahiye.\n\n⚠️ OTP, UPI PIN ya banking password screenshot mein visible ho to crop karke bhejo.",parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    if query.data.startswith("cryptorefresh_"):
+        from .payment_system import PAYMENTS
+        from bson import ObjectId
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"pending"})
+        except Exception: p=None
+        if not p: return await query.answer("Payment not found or already completed.", show_alert=True)
+        if p.get("expires_at") and p["expires_at"] <= datetime.now(p["expires_at"].tzinfo or pytz.UTC):
+            await PAYMENTS.update_one({"_id":p["_id"],"status":"pending"},{"$set":{"status":"expired","expired_at":datetime.now(p["expires_at"].tzinfo or pytz.UTC)}})
+            return await query.answer("Payment expired. Create a new payment.", show_alert=True)
+        await query.answer("🔎 Checking blockchain…", show_alert=False)
+        ok,tx=await verify_crypto(p)
+        if ok:
+            done=await _finish_crypto(p,tx)
+            if done:
+                expiry=(await db.get_user(query.from_user.id) or {}).get("expiry_time")
+                await query.message.edit_text(f"✅ <b>CRYPTO PAYMENT VERIFIED!</b>\n\n💎 Plan: {p['plan'].title()}\n⏰ Premium: {p['days']} days\n🔗 TX: <code>{tx}</code>\n\n🎉 Premium is now active.\n⌛ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p') if expiry else 'active'}</code>")
+            return
+        msg=await query.message.reply_text("⏳ Payment not detected yet. Make sure the exact amount and correct network were used, then tap Refresh Payment again.")
+        asyncio.create_task(asyncio.sleep(int(os.getenv("PAYMENT_ALERT_DELETE_SECONDS","7"))))
+        return
+
+    if query.data.startswith("payapprove_"):
+        await admin_payment_action(client, query, query.data.split("_",1)[1], True)
+        return
+    if query.data.startswith("paycancel_"):
+        await admin_payment_action(client, query, query.data.split("_",1)[1], False)
+        return
+    if query.data.startswith("payreject_"):
+        await admin_payment_action(client, query, query.data.split("_",1)[1], False)
+        return
 
     # --- Modern UI V3 navigation ---
     if query.data == "ui_home":
@@ -1152,6 +1322,8 @@ async def cb_handler(client: Client, query: CallbackQuery):
             await query.answer(alert, show_alert=True)
         
     if query.data.startswith("file"):
+        if not await get_setting("content_forwarding_enabled", True):
+            return await query.answer("📤 Content delivery is currently disabled by admin.", show_alert=True)
         clicked = query.from_user.id
         try:
             typed = query.from_user.id
@@ -1261,7 +1433,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.message.delete()
 
     elif query.data == "pages":
-        await query.answer()
+        await query.answer("📄 This button shows the current page. Use Next ➜ or Back to navigate through the available files.", show_alert=True)
     
     elif query.data.startswith("send_fsall"):
         temp_var, ident, key, offset = query.data.split("#")
@@ -1741,6 +1913,24 @@ async def cb_handler(client: Client, query: CallbackQuery):
     elif query.data == "pagesn1":
         await query.answer(text=script.PAGE_TXT, show_alert=True)
 
+    elif query.data == "quality_info":
+        await query.answer(
+            "🎞️ QUALITY GUIDE\n\nChoose a quality button only when you want to filter the available files by that quality.\n\nℹ️ If a quality is not available for this title, the bot will simply show no matching files.",
+            show_alert=True,
+        )
+
+    elif query.data == "language_info":
+        await query.answer(
+            "🌐 LANGUAGE GUIDE\n\nChoose a language to filter the files available for this title.\n\nℹ️ If that language is not uploaded, no matching files will be shown.",
+            show_alert=True,
+        )
+
+    elif query.data == "season_info":
+        await query.answer(
+            "📺 SEASON GUIDE\n\nSeason 1, Season 2, etc. are filters for TV series/episodic uploads.\n\n🎬 If you are viewing a movie, these buttons do not apply because a movie has no seasons. Use the file buttons or Quality/Language filters instead.",
+            show_alert=True,
+        )
+
     elif query.data == "reqinfo":
         await query.answer(text=script.REQINFO, show_alert=True)
 
@@ -1790,24 +1980,8 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.answer(MSG_ALRT)
 
     elif query.data == "purchase":
-        buttons = [[
-            InlineKeyboardButton('💵 ᴘᴀʏ ᴠɪᴀ ᴜᴘɪ ɪᴅ 💵', callback_data='upi_info')
-        ],[
-            InlineKeyboardButton('📸 ꜱᴄᴀɴ ǫʀ ᴄᴏᴅᴇ 📸', callback_data='qr_info')
-        ],[
-            InlineKeyboardButton('⇋ ʙᴀᴄᴋ ⇋', callback_data='premium_info')
-        ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await client.edit_message_media(
-            query.message.chat.id, 
-            query.message.id, 
-            InputMediaPhoto("https://graph.org/file/7519d226226bec1090db7.jpg")
-        )
-        await query.message.edit_text(
-            text=script.PURCHASE_TXT.format(query.from_user.mention),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
-        )
+        await query.message.edit_text("💎 <b>PREMIUM PLANS</b>\n━━━━━━━━━━━━━━━━━━\n\nSelect a plan to continue:", reply_markup=plan_keyboard(), parse_mode=enums.ParseMode.HTML)
+        return
 
     elif query.data == "donation":
         buttons = [[
@@ -1916,6 +2090,20 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
 
     elif query.data == "premium_info":
+        text = (
+            "💎 <b>PREMIUM MEMBERSHIP</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "🚀 Unlock a smoother, ad-free movie experience.\n"
+            "⚡ Fast access • 🎬 Premium features • 🔐 Secure checkout\n\n"
+            "Choose your plan below. Payment options are shown only when supported.\n\n"
+            "💳 UPI → Screenshot / UTR + admin verification\n"
+            "🪙 Crypto → Automatic blockchain verification\n"
+            "⭐ Telegram Stars → Native Telegram payment + automatic activation"
+        )
+        await query.message.edit_text(text, reply_markup=plan_keyboard(), parse_mode=enums.ParseMode.HTML)
+        return await query.answer()
+
+    elif query.data == "premium_info_legacy_disabled":
         buttons = [[
             InlineKeyboardButton('🤝🏻 Rᴇғᴇʀ & Gᴇᴛ Pʀᴇᴍɪᴜᴍ ', callback_data='reffff'),
         ],[
@@ -1964,7 +2152,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         
     elif query.data == "broze":
         buttons = [[
-            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='purchase')
+            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='payplan_bronze')
         ],[
             InlineKeyboardButton('⋞ ʙᴀᴄᴋ', callback_data='free'),
             InlineKeyboardButton('2 / 7', callback_data='pagesn1'),
@@ -1986,7 +2174,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
     elif query.data == "silver":
         buttons = [[
-            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='purchase')
+            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='payplan_silver')
         ],[
             InlineKeyboardButton('⋞ ʙᴀᴄᴋ', callback_data='broze'),
             InlineKeyboardButton('3 / 7', callback_data='pagesn1'),
@@ -2008,7 +2196,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 #Deendayal403
     elif query.data == "gold":
         buttons = [[
-            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='purchase')
+            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='payplan_gold')
         ],[
             InlineKeyboardButton('⋞ ʙᴀᴄᴋ', callback_data='silver'),
             InlineKeyboardButton('4 / 7', callback_data='pagesn1'),
@@ -2030,7 +2218,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
     elif query.data == "platinum":
         buttons = [[
-            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='purchase')
+            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='payplan_platinum')
         ],[
             InlineKeyboardButton('⋞ ʙᴀᴄᴋ', callback_data='gold'),
             InlineKeyboardButton('5 / 7', callback_data='pagesn1'),
@@ -2052,7 +2240,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
     elif query.data == "diamond":
         buttons = [[
-            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='purchase')
+            InlineKeyboardButton('🔐 ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ʙᴜʏ ᴘʀᴇᴍɪᴜᴍ', callback_data='payplan_diamond')
         ],[
             InlineKeyboardButton('⋞ ʙᴀᴄᴋ', callback_data='platinum'),
             InlineKeyboardButton('6 / 7', callback_data='pagesn1'),
@@ -2305,8 +2493,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 parse_mode=enums.ParseMode.HTML
         )
 
-    elif query.data == "ref_point":
-        await query.answer(f'You Have: {referdb.get_refer_points(query.from_user.id)} Refferal points.', show_alert=True)
     
    
     elif query.data == "shortlink_info":
@@ -2476,6 +2662,12 @@ async def auto_filter(client, msg, spoll=False):
             search = search.replace(":","")
             files, offset, total_results = await get_search_results(message.chat.id ,search, offset=0, filter=True)
             settings = await get_settings(message.chat.id)
+            if files:
+                try:
+                    if await get_setting("referral_enabled", True):
+                        await qualify_referral(message.from_user.id)
+                except Exception:
+                    logger.exception("Referral qualification failed")
             if not files:
                 #await m.delete()
                 if settings["spell_check"]:
@@ -2488,7 +2680,10 @@ async def auto_filter(client, msg, spoll=False):
                         await ai_sts.delete()
                         return await auto_filter(client, message)
                     await ai_sts.delete()
-                    return await advantage_spell_chok(client, message)
+                    await send_no_result_request(client, message, search)
+                    return
+                await send_no_result_request(client, message, search)
+                return
         else:
             return
     else:

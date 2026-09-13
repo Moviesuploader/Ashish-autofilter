@@ -55,6 +55,25 @@ async def Deendayal_start():
             spec.loader.exec_module(load)
             sys.modules["plugins." + plugin_name] = load
             print("Deendayal dhakad Imported => " + plugin_name)
+    try:
+        from database.admin_settings_db import ensure_settings, get_setting, set_setting
+        await ensure_settings()
+        from plugins.admin_panel import sync_bot_profile
+        await sync_bot_profile(DeendayalBot)
+        # Seed runtime channel settings from ENV only when the admin panel has not set them yet.
+        for _key, _value in (("movie_update_channel", DEENDAYAL_MOVIE_UPDATE_CHANNEL), ("log_channel", LOG_CHANNEL), ("premium_logs", PREMIUM_LOGS), ("backup_channel", FILE_STORE_CHANNEL[0] if FILE_STORE_CHANNEL else None), ("request_channel", REQST_CHANNEL)):
+            if _value and not await get_setting(_key):
+                await set_setting(_key, _value)
+        if DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK and not await get_setting("movie_update_channel_link"):
+            await set_setting("movie_update_channel_link", DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)
+    except Exception as e:
+        logging.exception("Admin runtime initialization failed: %s", e)
+    try:
+        from plugins.payment_system import ensure_payment_indexes
+        await ensure_payment_indexes()
+    except Exception as e:
+        logging.exception("Payment index initialization failed: %s", e)
+        raise
     if ON_HEROKU:
         asyncio.create_task(ping_server()) 
     b_users, b_chats = await db.get_banned()

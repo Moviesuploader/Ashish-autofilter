@@ -12,6 +12,7 @@ from utils import get_settings, save_group_settings, temp, get_status
 from database.users_chats_db import add_name
 from .Imdbposter import get_movie_details, fetch_image
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from database.admin_settings_db import get_setting
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -69,7 +70,7 @@ async def choose_mediaDB():
         logger.info("Using second db (Media2)")
         saveMedia = Media2
 
-async def save_file(bot, media):
+async def save_file(bot, media, update_message=None):
   """Save file in database"""
   global saveMedia
   file_id, file_ref = unpack_new_file_id(media.file_id)
@@ -100,7 +101,17 @@ async def save_file(bot, media):
     else:
         logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
         if await get_status(bot.me.id):
-            await send_msg(bot, file.file_name, file.caption)
+            if update_message:
+                try:
+                    # The indexing layer owns the status message; keep its existing poster/buttons.
+                    current_caption = update_message.caption.html if update_message.caption else ""
+                    final_caption = current_caption.replace("⏳ <b>Indexing / Uploading...</b>", "✅ <b>Indexed & Uploaded Successfully</b>")
+                    await update_message.edit_caption(final_caption)
+                except Exception:
+                    try: await send_msg(bot, file.file_name, file.caption, file.file_size)
+                    except Exception: pass
+            else:
+                await send_msg(bot, file.file_name, file.caption, file.file_size)
         return True, 1
 
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
@@ -251,57 +262,67 @@ def unpack_new_file_id(new_file_id):
     return file_id, file_ref
 
 
-async def send_msg(bot, filename, caption): 
+async def send_msg(bot, filename, caption, file_size=0, status="⏳ Movie indexed & uploaded successfully."):
+    """Publish a polished movie update to the runtime-configured update channel."""
     try:
+        if not await get_setting("movie_updates_enabled", True):
+            return
+        channel = await get_setting("movie_update_channel", DEENDAYAL_MOVIE_UPDATE_CHANNEL)
+        if not channel:
+            return
         filename = re.sub(r'\(\@\S+\)|\[\@\S+\]|\b@\S+|\bwww\.\S+', '', filename).strip()
         caption = re.sub(r'\(\@\S+\)|\[\@\S+\]|\b@\S+|\bwww\.\S+', '', caption).strip()
-        
-        year_match = re.search(r"\b(19|20)\d{2}\b", caption)
-        year = year_match.group(0) if year_match else None
-
+        year_match = re.search(r"\b(19|20)\d{2}\b", caption) or re.search(r"\b(19|20)\d{2}\b", filename)
+        year = year_match.group(0) if year_match else "N/A"
         pattern = r"(?i)(?:s|season)0*(\d{1,2})"
         season = re.search(pattern, caption) or re.search(pattern, filename)
-        season = season.group(1) if season else None 
-
-        if year:
-            filename = filename[: filename.find(year) + 4]  
-        elif season and season in filename:
-            filename = filename[: filename.find(season) + 1]
-
-        qualities = ["ORG", "org", "hdcam", "HDCAM", "HQ", "hq", "HDRip", "hdrip", "camrip", "CAMRip", "hdtc", "predvd", "DVDscr", "dvdscr", "dvdrip", "dvdscr", "HDTC", "dvdscreen", "HDTS", "hdts"]
-        quality = await get_qualities(caption.lower(), qualities) or "HDRip"
-
+        season_text = f"S{int(season.group(1)):02d}" if season else ""
+        qualities = ["2160p","1440p","1080p","720p","480p","360p","WEB-DL","WEBRip","BluRay","HDRip","HDTV","HDCAM","CAMRip","DVDscr","DVDRip","HDTS","HDTC"]
+        quality = next((q for q in qualities if q.lower() in caption.lower() or q.lower() in filename.lower()), "N/A")
         language = ""
-        possible_languages = CAPTION_LANGUAGES
-        for lang in possible_languages:
-            if lang.lower() in caption.lower():
-                language += f"{lang}, "
-        language = language[:-2] if language else "Not idea 😄"
-
-        filename = re.sub(r"[\(\)\[\]\{\}:;'\-!]", "", filename)
-
-        text = "#𝑵𝒆𝒘_𝑭𝒊𝒍𝒆_𝑨𝒅𝒅𝒆𝒅 ✅\n\n<b>🏷️𝑵𝒂𝒎𝒆: `{}`\n\n<blockquote>🔮𝑸𝒖𝒂𝒍𝒊𝒕𝒚: {}\n\n🔊𝑨𝒖𝒅𝒊𝒐: {}</blockquote></b>"
-        text = text.format(filename, quality, language)
-
-        if await add_name(OWNERID, filename):
-            imdb = await get_movie_details(filename)  
-            resized_poster = None
-
-            if imdb:
-                poster_url = imdb.get('poster_url')
-                if poster_url:
-                    resized_poster = await fetch_image(poster_url)  
-
-            filenames = filename.replace(" ", '-')
-            btn = [[InlineKeyboardButton('📁 Get Files 📁', url=f"https://telegram.me/{temp.U_NAME}?start=getfile-{filenames}")]]
-            
-            if resized_poster:
-                await bot.send_photo(chat_id=DEENDAYAL_MOVIE_UPDATE_CHANNEL, photo=resized_poster, caption=text, reply_markup=InlineKeyboardMarkup(btn))
-            else:              
-                await bot.send_message(chat_id=DEENDAYAL_MOVIE_UPDATE_CHANNEL, text=text, reply_markup=InlineKeyboardMarkup(btn))
-
-    except:
-        pass
+        for lang in CAPTION_LANGUAGES:
+            if lang and lang.lower() in caption.lower() and lang.lower() not in language.lower():
+                language += (", " if language else "") + lang
+        language = language or "N/A"
+        clean_name = re.sub(r"[\(\)\[\]\{\}:;'\-!]", " ", filename)
+        clean_name = re.sub(r"\s+", " ", clean_name).strip()
+        if year != "N/A":
+            clean_name = re.sub(r"\b(19|20)\d{2}\b", "", clean_name).strip(" -")
+        size_text = "N/A"
+        if file_size:
+            size = float(file_size); units = ["B","KB","MB","GB","TB"]; i=0
+            while size >= 1024 and i < len(units)-1: size/=1024; i+=1
+            size_text = f"{size:.2f} {units[i]}"
+        try:
+            imdb = await get_movie_details(f"{clean_name} {year}" if year != "N/A" else clean_name)
+        except Exception:
+            imdb = None
+        title = imdb.get("title") if imdb else clean_name
+        rating = imdb.get("rating") if imdb else "N/A"
+        genres = imdb.get("genres") if imdb else "N/A"
+        plot = imdb.get("plot") if imdb else ""
+        if plot and len(plot) > 300: plot = plot[:297] + "..."
+        season_line = f"📺 Season: <b>{season_text}</b>\n" if season_text else ""
+        plot_line = f"\n📝 {plot}" if plot else ""
+        text = (f"🎬 <b>{title}</b> <b>({year})</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"⭐ IMDb: <b>{rating}</b>/10\n"
+                f"🎭 Genre: <b>{genres or 'N/A'}</b>\n"
+                f"🎞️ Quality: <b>{quality}</b>\n"
+                f"🌐 Language: <b>{language}</b>\n"
+                f"💾 Size: <b>{size_text}</b>\n"
+                f"{season_line}\n"
+                f"{status}\n"
+                f"{plot_line}")
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", f"{title}-{year}").strip("-")[:90]
+        bot_username = getattr(temp, "U_NAME", "") or ""
+        btn = [[InlineKeyboardButton("🎬 GET THIS MOVIE", url=f"https://t.me/{bot_username}?start=getfile-{slug}")]] if bot_username else []
+        if imdb and imdb.get("poster_url"):
+            await bot.send_photo(chat_id=channel, photo=imdb.get("poster_url"), caption=text, reply_markup=InlineKeyboardMarkup(btn) if btn else None)
+        else:
+            await bot.send_message(chat_id=channel, text=text, reply_markup=InlineKeyboardMarkup(btn) if btn else None, disable_web_page_preview=True)
+    except Exception:
+        logger.exception("Movie update publish failed")
 
 async def get_qualities(text, qualities: list):
     """Get all Quality from text"""

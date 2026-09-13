@@ -5,13 +5,15 @@ import base64
 import logging
 import random
 import asyncio
+from urllib.parse import quote_plus
 import time
 import pytz
 from database.verify_db import vr_db
 from .pmfilter import auto_filter 
 from Script import script
 from datetime import datetime
-from database.refer import referdb
+from database.referral_db import register_referral
+from database.admin_settings_db import get_setting
 from database.config_db import mdb
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait
@@ -22,6 +24,8 @@ from info import CHANNELS, FSUB_PICS, ADMINS, LOG_CHANNEL, PICS, BATCH_FILE_CAPT
 from utils import get_settings, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_time, VERIFY_ORIGIN
 from .ui_theme import home_caption, home_keyboard, reply_keyboard
 from database.connections_mdb import active_connection
+from .request_system import handle_user_request_text, handle_admin_reply_text, handle_request_callback, request_prompt
+from .payment_system import plan_keyboard
 
 # Set up logging
 logging.basicConfig(level=logging.ERROR)
@@ -29,6 +33,36 @@ logger = logging.getLogger(__name__)
 
 TIMEZONE = "Asia/Kolkata"
 BATCH_FILES = {}
+
+def pretty_delivery_caption(file_name, file_size, original_caption=""):
+    import re
+    clean = re.sub(r"\[.*?\]|\(.*?\)", " ", str(file_name or ""))
+    clean = re.sub(r"[_\-]+", " ", clean)
+    year = re.search(r"\b(?:19|20)\d{2}\b", str(file_name or "") + " " + str(original_caption or ""))
+    quality_terms = ["2160p","1440p","1080p","720p","480p","360p","WEB-DL","WEBRip","BluRay","HDRip","HDTV","HDCAM","CAMRip","DVDRip"]
+    quality = next((q for q in quality_terms if q.lower() in (str(file_name)+" "+str(original_caption)).lower()), "Not specified")
+    languages = []
+    for lang in ["Hindi","English","Tamil","Telugu","Malayalam","Kannada","Bengali","Bangla","Marathi","Punjabi","Gujarati","Korean","Spanish","French","German","Japanese","Arabic","Urdu"]:
+        if lang.lower() in (str(file_name)+" "+str(original_caption)).lower() and lang not in languages:
+            languages.append(lang)
+    language = ", ".join(languages) if languages else "Not specified"
+    title = re.split(r"\b(?:19|20)\d{2}\b", clean, maxsplit=1)[0].strip(" .") if year else clean.strip()
+    title = re.sub(r"\s+", " ", title).strip() or clean.strip() or "Movie File"
+    size = get_size(file_size)
+    return (f"🎬 <b>{title}</b>" + (f" <b>({year.group(0)})</b>" if year else "") + "\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"🎞️ <b>Quality:</b> {quality}\n"
+            f"🌐 <b>Language:</b> {language}\n"
+            f"💾 <b>Size:</b> {size}\n\n"
+            "⚡ <i>Fast Telegram delivery • Watch online supported</i>")
+
+async def delivery_keyboard(file_id, stream=True):
+    rows = []
+    if stream:
+        rows.append([InlineKeyboardButton("▶️ WATCH ONLINE  •  ⚡ FAST STREAM", callback_data=f"generate_stream_link:{file_id}")])
+    update_link = await get_setting("movie_update_channel_link", None) or DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK
+    rows.append([InlineKeyboardButton("💾 SAVE COPY", callback_data=f"savecopy#{file_id}"), InlineKeyboardButton("📡 MOVIE UPDATES", url=update_link)])
+    return InlineKeyboardMarkup(rows)
 
 
 async def _delete_later(message, delay):
@@ -78,25 +112,21 @@ async def pm_quick_keyboard(client, message):
         return
 
     if choice == "⭐ Premium":
-        await message.reply_photo(
-            photo=SUBSCRIPTION,
-            caption=script.PREPLANS_TXT.format(message.from_user.mention, OWNER_UPI_ID, QR_CODE),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📲 Send Payment Screenshot", url=OWNER_LNK)],
-                [InlineKeyboardButton("✖️ Close", callback_data="close_data")],
-            ]),
+        await message.reply_text(
+            "💎 <b>PREMIUM MEMBERSHIP</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+            "🚀 Choose a plan and then select your preferred payment method.\n\n"
+            "💳 UPI → Screenshot / UTR + admin verification\n"
+            "🪙 Crypto → Automatic blockchain verification\n"
+            "⭐ Telegram Stars → Native Telegram payment + automatic activation",
+            reply_markup=plan_keyboard(),
             parse_mode=enums.ParseMode.HTML,
         )
         return
 
     if choice == "📩 Request Movie":
         await message.reply_text(
-            "📩 <b>Request a Movie</b>\n\n"
-            f"Send your request in our movie request group:\n{GRP_LNK}\n\n"
-            "<i>Please include the title and year when possible.</i>",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📩 Open Request Group", url=GRP_LNK)]
-            ]),
+            request_prompt(),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📩 Start Request", callback_data="request_start")], [InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]),
             parse_mode=enums.ParseMode.HTML,
             disable_web_page_preview=True,
         )
@@ -145,16 +175,31 @@ async def pm_back_to_menu(client, message):
     await message.reply_text("🏠 <b>Back to Home</b>", reply_markup=reply_keyboard(), parse_mode=enums.ParseMode.HTML)
     return
 
+@Client.on_message(filters.command("refer") & filters.private)
+async def refer_command(client, message):
+    from .pmfilter import refercall
+    class _Q:
+        pass
+    # Directly show the same referral center through a lightweight message.
+    from database.referral_db import get_dashboard
+    d = await get_dashboard(message.from_user.id)
+    reward = int(await get_setting("referral_reward_points", 5)); threshold = int(await get_setting("referral_redeem_points", 20)); days = int(await get_setting("referral_redeem_days", 10))
+    link = f"https://t.me/{client.me.username}?start=reff_{message.from_user.id}"
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("📤 Share Referral Link", url=f"https://t.me/share/url?url={link}")],[InlineKeyboardButton("💎 Redeem Premium", callback_data="ref_redeem"),InlineKeyboardButton("📜 History", callback_data="ref_history")],[InlineKeyboardButton("⚡ Activation Logs", callback_data="ref_activations")]])
+    await message.reply_text(f"🤝 <b>REFER & EARN PREMIUM</b>\n━━━━━━━━━━━━━━━━━━\n🎁 Reward: <b>{reward} points</b> / qualified referral\n👥 Successful: <b>{d['qualified']}</b>\n💎 Total earned: <b>{d['earned']} points</b>\n💰 Current balance: <b>{d['points']} points</b>\n🎟️ <b>{threshold} points = {days} days Premium</b>\n\n🔗 <code>{link}</code>", reply_markup=kb, parse_mode=enums.ParseMode.HTML)
+
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
     if EMOJI_MODE:    
         await message.react(emoji=random.choice(REACTIONS), big=True) 
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
         buttons = [[
-                    InlineKeyboardButton('⚜️ ᴀᴅᴅ ᴍᴇ ᴛᴏ ʏᴏᴜʀ ɢʀᴏᴜᴘ ⚜️', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
+                    InlineKeyboardButton('🔎 SEARCH MOVIES', switch_inline_query_current_chat=''),
+                    InlineKeyboardButton('📩 REQUEST', callback_data='request_start')
                 ],[
-                    InlineKeyboardButton('🔱 Update Channel 🔱', url=CHNL_LNK)
-                  ]]
+                    InlineKeyboardButton('📡 MOVIE UPDATES', url=CHNL_LNK),
+                    InlineKeyboardButton('⚜️ ADD TO GROUP', url=f'http://t.me/{temp.U_NAME}?startgroup=true')
+                ]]
         reply_markup = InlineKeyboardMarkup(buttons)
         await message.reply(script.GSTART_TXT.format(message.from_user.mention if message.from_user else message.chat.title, temp.U_NAME, temp.B_NAME), reply_markup=reply_markup, disable_web_page_preview=True)
         await asyncio.sleep(2) 
@@ -230,58 +275,33 @@ async def start(client, message):
         return
     if message.command[1].startswith("reff_"):
         try:
-            user_id = int(message.command[1].split("_")[1])
-        except ValueError:
-            await message.reply_text("Invalid refer!")
-            return
-        if user_id == message.from_user.id:
-            await message.reply_text("Hᴇʏ Dᴜᴅᴇ, Yᴏᴜ Cᴀɴ'ᴛ Rᴇғᴇʀ Yᴏᴜʀsᴇʟғ 🤣!\n\nsʜᴀʀᴇ ʟɪɴᴋ ʏᴏᴜʀ ғʀɪᴇɴᴅ ᴀɴᴅ ɢᴇᴛ 10 ʀᴇғᴇʀʀᴀʟ ᴘᴏɪɴᴛ ɪғ ʏᴏᴜ ᴀʀᴇ ᴄᴏʟʟᴇᴄᴛɪɴɢ 100 ʀᴇғᴇʀʀᴀʟ ᴘᴏɪɴᴛs ᴛʜᴇɴ ʏᴏᴜ ᴄᴀɴ ɢᴇᴛ 1 ᴍᴏɴᴛʜ ғʀᴇᴇ ᴘʀᴇᴍɪᴜᴍ ᴍᴇᴍʙᴇʀsʜɪᴘ.")
-            return
-        if referdb.is_user_in_list(message.from_user.id):
-            await message.reply_text("Yᴏᴜ ʜᴀᴠᴇ ʙᴇᴇɴ ᴀʟʀᴇᴀᴅʏ ɪɴᴠɪᴛᴇᴅ ❗")
-            return
-        try:
-            uss = await client.get_users(user_id)
-        except Exception:
-            return 	    
-        referdb.add_user(message.from_user.id)
-        fromuse = referdb.get_refer_points(user_id) + 10
-        if fromuse == 100:
-            referdb.add_refer_points(user_id, 0) 
-            await message.reply_text(f"🎉 𝗖𝗼𝗻𝗴𝗿𝗮𝘁𝘂𝗹𝗮𝘁𝗶𝗼𝗻𝘀! 𝗬𝗼𝘂 𝘄𝗼𝗻 𝟭𝟬 𝗥𝗲𝗳𝗲𝗿𝗿𝗮𝗹 𝗽𝗼𝗶𝗻𝘁 𝗯𝗲𝗰𝗮𝘂𝘀𝗲 𝗬𝗼𝘂 𝗵𝗮𝘃𝗲 𝗯𝗲𝗲𝗻 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗜𝗻𝘃𝗶𝘁𝗲𝗱 ☞ {uss.mention}!")		    
-            await client.send_message(chat_id=user_id, text=f"You have been successfully invited by {message.from_user.mention}!") 	
-            seconds = 2592000
-            if seconds > 0:
-                expiry_time = datetime.datetime.now() + datetime.timedelta(seconds=seconds)
-                user_data = {"id": user_id, "expiry_time": expiry_time}  # Using "id" instead of "user_id"  
-                await db.update_user(user_data)  # Use the update_user method to update or insert user data		    
-                await client.send_message(
-                chat_id=user_id,
-                text=f"<b>Hᴇʏ {uss.mention}\n\nYᴏᴜ ɢᴏᴛ 1 ᴍᴏɴᴛʜ ᴘʀᴇᴍɪᴜᴍ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ʙʏ ɪɴᴠɪᴛɪɴɢ 10 ᴜsᴇʀs ❗", disable_web_page_preview=True              
-                )
-            for admin in ADMINS:
-                await client.send_message(chat_id=admin, text=f"Sᴜᴄᴄᴇss ғᴜʟʟʏ ᴛᴀsᴋ ᴄᴏᴍᴘʟᴇᴛᴇᴅ ʙʏ ᴛʜɪs ᴜsᴇʀ:\n\nuser Nᴀᴍᴇ: {uss.mention}\n\nUsᴇʀ ɪᴅ: {uss.id}!")	
-        else:
-            referdb.add_refer_points(user_id, fromuse)
-            await message.reply_text(f"You have been successfully invited by {uss.mention}!")
-            await client.send_message(user_id, f"𝗖𝗼𝗻𝗴𝗿𝗮𝘁𝘂𝗹𝗮𝘁𝗶𝗼𝗻𝘀! 𝗬𝗼𝘂 𝘄𝗼𝗻 𝟭𝟬 𝗥𝗲𝗳𝗲𝗿𝗿𝗮𝗹 𝗽𝗼𝗶𝗻𝘁 𝗯𝗲𝗰𝗮𝘂𝘀𝗲 𝗬𝗼𝘂 𝗵𝗮𝘃𝗲 𝗯𝗲𝗲𝗻 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹𝗹𝘆 𝗜𝗻𝘃𝗶𝘁𝗲𝗱 ☞{message.from_user.mention}!")
+            inviter_id = int(message.command[1].split("_", 1)[1])
+        except (ValueError, IndexError):
+            return await message.reply_text("❌ Invalid referral link.")
+        if not await get_setting("referral_enabled", True):
+            return await message.reply_text("ℹ️ Referral rewards are currently disabled.")
+        ok, reason = await register_referral(inviter_id, message.from_user.id)
+        if reason == "self":
+            return await message.reply_text("😄 You can't use your own referral link.")
+        if reason == "already":
+            return await message.reply_text("ℹ️ Your referral is already registered. You can qualify it by completing a successful movie search.")
+        await message.reply_text(f"🎉 Welcome! You were invited by <b>{(await client.get_users(inviter_id)).mention}</b>.\n\n🔎 Complete a successful movie search to activate the referral reward.", parse_mode=enums.ParseMode.HTML)
         return
-        
+
     if len(message.command) == 2 and message.command[1] in ["premium"]:
-        buttons = [[
-                    InlineKeyboardButton('📲 ꜱᴇɴᴅ ᴘᴀʏᴍᴇɴᴛ ꜱᴄʀᴇᴇɴꜱʜᴏᴛ', url=OWNER_LNK)
-                  ],[
-                    InlineKeyboardButton('❌ ᴄʟᴏꜱᴇ ❌', callback_data='close_data')
-                  ]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await message.reply_photo(
-            photo=(SUBSCRIPTION),
-            caption=script.PREPLANS_TXT.format(message.from_user.mention, OWNER_UPI_ID, QR_CODE),
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML
+        await message.reply_text(
+            "💎 <b>PREMIUM MEMBERSHIP</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+            "🚀 Choose your plan below. Payment options are shown at checkout.\n\n"
+            "💳 UPI → Screenshot / UTR + admin verification\n"
+            "🪙 Crypto → Automatic blockchain verification\n"
+            "⭐ Telegram Stars → Native Telegram payment + automatic activation",
+            reply_markup=plan_keyboard(),
+            parse_mode=enums.ParseMode.HTML,
         )
-        return  
+        return
     if len(message.command) == 2 and message.command[1].startswith('getfile'):
+        if not await get_setting("content_forwarding_enabled", True):
+            return await message.reply_text("📤 Content delivery is currently disabled by admin.")
         movies = message.command[1].split("-", 1)[1] 
         movie = movies.replace('-',' ')
         message.text = movie 
@@ -314,6 +334,8 @@ async def start(client, message):
                 return
             
     data = message.command[1]
+    if data.startswith(("file_", "filep_", "allfiles", "sendfiles", "short_")) and not await get_setting("content_forwarding_enabled", True):
+        return await message.reply_text("📤 Content delivery is currently disabled by admin.")
     try:
         pre, file_id = data.split('_', 1)
     except:
@@ -350,15 +372,7 @@ async def start(client, message):
             if f_caption is None:
                 f_caption = f"{title}"
 
-            if STREAM_MODE:
-                btn = [
-                    [InlineKeyboardButton('🚀 ꜰᴀꜱᴛ ᴅᴏᴡɴʟᴏᴀᴅ / ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ 🖥️', callback_data=f'generate_stream_link:{file_id}')],
-                    [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]  # Keep this line unchanged
-                ]
-            else:
-                btn = [
-                    [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]
-                ]
+            btn = await delivery_keyboard(file_id, stream=STREAM_MODE)
             try:
                 await client.send_cached_media(
                     chat_id=message.from_user.id,
@@ -556,10 +570,11 @@ async def start(client, message):
 
             if f_caption is None:
                 f_caption = f"{' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), files1.file_name.split()))}"
+            f_caption = pretty_delivery_caption(files1.file_name, files1.file_size, f_caption)
             if await db.has_premium_access(message.from_user.id):
                 pass  
             else:
-                if not await check_verification(client, message.from_user.id) and VERIFY == True:
+                if not await check_verification(client, message.from_user.id) and VERIFY == True and await get_setting("verification_enabled", True) and await get_setting("verification_enabled", True):
                     btn = [[
                        InlineKeyboardButton("✅ Cʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴠᴇʀɪғʏ ✅", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", file_id, chat_id=(temp.SHORT.get(message.from_user.id) or message.chat.id)))
                        ],[
@@ -573,15 +588,7 @@ async def start(client, message):
                     await asyncio.sleep(180)
                     await l.delete()
                     return
-            if STREAM_MODE:
-                btn = [
-                    [InlineKeyboardButton('🚀 ꜰᴀꜱᴛ ᴅᴏᴡɴʟᴏᴀᴅ / ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ 🖥️', callback_data=f'generate_stream_link:{file_id}')],
-                    [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]  # Keep this line unchanged  
-                ]
-            else:
-                btn = [
-                    [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]
-                ]
+            btn = await delivery_keyboard(file_id, stream=STREAM_MODE)
 
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
@@ -657,7 +664,7 @@ async def start(client, message):
             if await db.has_premium_access(message.from_user.id): 
                 pass 
             else:
-               if not await check_verification(client, message.from_user.id) and VERIFY == True:
+               if not await check_verification(client, message.from_user.id) and VERIFY == True and await get_setting("verification_enabled", True) and await get_setting("verification_enabled", True):
                    btn = [[
                        InlineKeyboardButton("✅ Cʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴠᴇʀɪғʏ ✅", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", file_id, chat_id=(temp.SHORT.get(message.from_user.id) or message.chat.id)))
                    ],[
@@ -671,16 +678,7 @@ async def start(client, message):
                    await asyncio.sleep(180)
                    await l.delete()
                    return
-            if STREAM_MODE:
-                btn = [
-                    [InlineKeyboardButton('🚀 ꜰᴀꜱᴛ ᴅᴏᴡɴʟᴏᴀᴅ / ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ 🖥️', callback_data=f'generate_stream_link:{file_id}')],
-                    [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]  # Keep this line unchanged
-             
-                ]
-            else:
-                btn = [
-                    [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]
-                ]
+            btn = await delivery_keyboard(file_id, stream=STREAM_MODE)
             msg = await client.send_cached_media(
                 chat_id=message.from_user.id,
                 file_id=file_id,
@@ -691,7 +689,7 @@ async def start(client, message):
             file = getattr(msg, filetype.value)
             title = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))
             size=get_size(file.file_size)
-            f_caption = f"<code>{title}</code>"
+            f_caption = pretty_delivery_caption(file.file_name, file.file_size, "")
             if CUSTOM_FILE_CAPTION:
                 try:
                     f_caption=CUSTOM_FILE_CAPTION.format(file_name= '' if title is None else title, file_size='' if size is None else size, file_caption='')
@@ -731,10 +729,13 @@ async def start(client, message):
     if f_caption is None:
         f_caption = ' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), files.file_name.split()))
 
+    # Unified attractive delivery caption for PM and group-triggered deliveries.
+    f_caption = pretty_delivery_caption(title, files.file_size, f_caption)
+
     if await db.has_premium_access(message.from_user.id):
         pass
     else:
-        if not await check_verification(client, message.from_user.id) and VERIFY == True:
+        if not await check_verification(client, message.from_user.id) and VERIFY == True and await get_setting("verification_enabled", True) and await get_setting("verification_enabled", True):
             btn = [[
               InlineKeyboardButton("✅ Cʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴠᴇʀɪғʏ ✅", url=await get_token(client, message.from_user.id, f"https://telegram.me/{temp.U_NAME}?start=", file_id, chat_id=(temp.SHORT.get(message.from_user.id) or message.chat.id)))
            ],[
@@ -748,15 +749,7 @@ async def start(client, message):
             await asyncio.sleep(180)
             await l.delete()
             return
-    if STREAM_MODE:
-        btn = [
-            [InlineKeyboardButton('🚀 ꜰᴀꜱᴛ ᴅᴏᴡɴʟᴏᴀᴅ / ᴡᴀᴛᴄʜ ᴏɴʟɪɴᴇ 🖥️', callback_data=f'generate_stream_link:{file_id}')],
-            [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]  # Keep this line unchanged
-        ]
-    else:
-        btn = [
-            [InlineKeyboardButton('📌 ᴊᴏɪɴ ᴜᴘᴅᴀᴛᴇꜱ ᴄʜᴀɴɴᴇʟ 📌', url=DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK)]
-        ]
+    btn = await delivery_keyboard(file_id, stream=STREAM_MODE)
     msg = await client.send_cached_media(
         chat_id=message.from_user.id,
         file_id=file_id,

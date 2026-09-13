@@ -5,6 +5,7 @@ import datetime
 import pytz  
 from pymongo.errors import DuplicateKeyError
 from pymongo import MongoClient
+from database.admin_settings_db import get_setting
 
 my_client = MongoClient(DATABASE_URI)
 mydb = my_client["filename"]
@@ -176,8 +177,22 @@ class Database:
         }
         chat = await self.grp.find_one({'id':int(id)})
         if chat:
-            return chat.get('settings', default)
-        return default
+            settings = chat.get('settings', default)
+        else:
+            settings = default
+        # Global Admin Panel switch overrides per-group force-sub setting.
+        if not await get_setting("force_sub_enabled", True):
+            settings = dict(settings)
+            settings['fsub'] = []
+        else:
+            runtime_auth = await get_setting("auth_channels", None) if await get_setting("auth_enabled", True) else []
+            if runtime_auth:
+                settings = dict(settings)
+                settings['fsub'] = runtime_auth if isinstance(runtime_auth, list) else [runtime_auth]
+        if not await get_setting("auto_delete_enabled", True):
+            settings = dict(settings)
+            settings['auto_delete'] = False
+        return settings
     
     async def disable_chat(self, chat, reason="No Reason"):
         chat_status=dict(
