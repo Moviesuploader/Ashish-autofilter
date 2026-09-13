@@ -1,208 +1,59 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BTMX_ZONE™ | {{file_name}}</title>
-    <link rel="stylesheet" href="https://unpkg.com/sheryjs/dist/Shery.css" />
-    <link rel="stylesheet" href="https://biisal.github.io/Resources/StreamCSS.css">
-    <link rel="stylesheet" href="https://biisal.github.io/Resources/playerCss.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css"
-        integrity="sha512-z3gLpd7yknf1YoNbCzqRKc4qyor8gaKU1qmn+CShxbuBusANI9QpRohGBreCFkKxLhei6S9CQXFEbbKuqLg0DA=="
-        crossorigin="anonymous" referrerpolicy="no-referrer" />
-    <script src="https://cdn.tailwindcss.com"></script>
-
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#070709">
+<title>{{file_name}} • Stream</title>
+<style>
+:root{--bg:#050507;--panel:#0d0d11;--panel2:#15151b;--text:#f7f7f8;--muted:#a8a8b3;--line:#282832;--accent:#e50914;--accent2:#ff3340}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}body{min-height:100vh}
+.page{min-height:100vh;background:radial-gradient(circle at 50% 0,#241014 0,transparent 38%),linear-gradient(180deg,#09090c 0,#050507 55%,#020203 100%)}
+.top{height:62px;display:flex;align-items:center;justify-content:space-between;padding:0 20px;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(5,5,7,.78);backdrop-filter:blur(18px);position:sticky;top:0;z-index:20}.brand{font-weight:900;letter-spacing:.8px}.brand b{color:var(--accent)}.top small{color:var(--muted)}
+.hero{max-width:1250px;margin:auto;padding:24px 16px 40px}.player-wrap{position:relative;background:#000;border-radius:18px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.65);border:1px solid rgba(255,255,255,.08)}video{display:block;width:100%;height:auto;min-height:240px;max-height:72vh;background:#000;object-fit:contain}.loading{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.42);font-weight:700;pointer-events:none}.loading.show{display:grid}.spinner{width:38px;height:38px;border:3px solid rgba(255,255,255,.22);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.info{display:grid;grid-template-columns:1fr auto;gap:18px;align-items:end;padding:22px 2px 16px}.eyebrow{color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1.5px}.title{font-size:clamp(22px,4vw,38px);line-height:1.08;margin:6px 0 8px;font-weight:900}.meta{color:var(--muted);font-size:14px}.actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}.btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);padding:11px 15px;border-radius:10px;text-decoration:none;font-weight:800;cursor:pointer}.btn.primary{background:var(--accent);border-color:var(--accent)}.btn:hover{filter:brightness(1.12)}
+.controls{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:10px}.control{background:rgba(16,16,21,.9);border:1px solid var(--line);border-radius:13px;padding:12px}.control label{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:7px}.control select{width:100%;background:#08080b;color:#fff;border:1px solid #30303a;border-radius:9px;padding:9px;font-weight:700;outline:none}.quality-note{font-size:11px;color:#858591;margin-top:6px}
+.download{margin-top:16px;padding:16px;background:linear-gradient(135deg,#16161c,#0d0d11);border:1px solid var(--line);border-radius:15px;display:flex;align-items:center;justify-content:space-between;gap:14px}.download strong{font-size:15px}.download span{display:block;color:var(--muted);font-size:12px;margin-top:4px}.server{display:flex;align-items:center;gap:8px}.dot{width:8px;height:8px;border-radius:50%;background:#47d16c;box-shadow:0 0 10px #47d16c}.status{color:var(--muted);font-size:12px}
+.footer{max-width:1250px;margin:auto;padding:24px 16px 50px;color:#777;font-size:12px;text-align:center}.footer a{color:#aaa;text-decoration:none}
+@media(max-width:760px){.top{padding:0 14px}.hero{padding:12px 10px 30px}.player-wrap{border-radius:12px}.info{grid-template-columns:1fr}.actions{justify-content:flex-start}.controls{grid-template-columns:1fr 1fr}.download{align-items:flex-start;flex-direction:column}.download .btn{width:100%}}
+@media(max-width:430px){.controls{grid-template-columns:1fr}.top small{display:none}}
+</style>
 </head>
-
 <body>
-    <nav>
-        <div class="nleft">
-            <a href="https://t.me/btmx_zone">
-                <!-- if u are trying to change the header name please remove the title text from bottom line  -->
-                <h3 id="heading" style="z-index: 100;" class="magnet">BTMX_ZONE™</h3>
-            </a>
-        </div>
-        <div class="nryt">
-            <a class="home-btn magnet" href="#main" onclick="toggleWidthnav(this)">Home</a>
-
-            <a href="#sec1" class="about-btn magnet" onclick="toggleWidthnav(this)">About</a>
-        </div>
-    </nav>
-    <center>
-        <div class="about-nav">
-            <a href="#sec1" class="wlcm magnet" onclick="toggleWidth(this)">Welcome</a>
-            <a href="#sec2" class="abt-chnl magnet" onclick="toggleWidth(this)">Channels</a>
-            <a href="#sec3" class="magnet bot-btn" onclick="toggleWidth(this) , bot_btn_clicked()">Bots</a>
-            <a href="#sec4" class="magnet contact-btn" onclick="toggleWidth(this)">Let's Talk</a>
-        </div>
-    </center>
-    <!-- this code is written by @biisal tg:biisal-files  -->
-    <!-- stealing credit doesn't make you developer..so try to give full credit to the developer 😊 u will not loose anything for giving proper credit.   -->
-
-    <div class="outer">
-        <div class="inner">
-            <div class="main" id="main">
-                <video id="player" class="player" src="{{file_url}}" type="video/mp4" playsinline controls
-                    width="100%"></video>
-                <div class="player"></div>
-                <div class="file-name">
-                    <h4>File name : </h4>
-                    <br>
-                    <p id="myDiv">{{file_name}}</p>
-                </div>
-                <div class="downloadBtn">
-                    <button class="magnet" onclick="vlc_player()"><img src="https://i.postimg.cc/15TQ4y7B/vlc.png"
-                            alt="">watch in VLC PLAYER</button>
-                    <button class="magnet" onclick="mx_player()"><img src="https://i.postimg.cc/sx4Msv4T/mx.png"
-                            alt="">watch in MX PLAYER</button>
-                    <button class="magnet" onclick="playit_player()"><img src="https://i.postimg.cc/RVGWYJFF/playit.png"
-                            alt="">watch in PLAYit
-                        PLAYER</button>
-                    <button class="magnet" onclick="km_player()"><img src="https://i.postimg.cc/wT9tFQ9Z/km.png"
-                            alt="">watch in KM PLAYER</button>
-                    <button class="magnet" onclick="s_player()"><img src="https://i.postimg.cc/XYJr6NGg/s.png"
-                            alt="">watch in S PLAYER</button>
-                    <button class="magnet" onclick="hd_player()"><img src="https://i.postimg.cc/rFT43LNh/hd.png"
-                            alt="">watch in HD
-                        PLAYER(4K)</button>
-                    <button class="magnet" onclick="bisalDownload()"><img style="height: 35px;"
-                            src="https://i.postimg.cc/Zncc9YLq/Pngtree-download-icon-3581467.png" alt="">download video
-                    </button>
-                </div>
-
-            </div>
-            <div class="abt">
-                <div class="about">
-                    <div class="about-dets">
-                        <div class="abt-sec" id="sec1" style="padding: 160px 30px;">
-                            <h1 style="text-align: center;">WELCOME TO OUR <Span>STREAMING</Span> PAGE</h1>
-                            <p style="text-align: center; line-height: 2;word-spacing: 2px;  letter-spacing: 0.8px;">
-                                We're
-                                thrilled to have <span>you</span> here.
-                                Get ready for an
-                                amazing <span>experience</span>
-                                filled with <span>entertainment</span>, <span>fun</span>, and <span>surprises</span>.
-                                Grab
-                                your snacks, sit back, and <span>enjoy</span> the show!
-                            </p>
-                        </div>
-                        <div class="abt-sec" id="sec2">
-                            <h1>OUR ALL <span>CHANNELS</span> LIST</h1>
-                            <div class="links chnl-link">
-                                <a class="magnet" href="https://t.me/btmx_zone"><button>Update Channel </button></a>
-                                <a class="magnet" href="https://t.me/beautyofthemoviesdiscussion"><button> Movie Request Group </button></a>
-                                <a class="magnet" href="https://youtube.com/@lyrics_of_kstatus?si=MfhIOkhCbHCD1pH3"><button>YouTube Channel </button></a>
-                            </div>
-                        </div>
-                        <div class="abt-sec" id="sec3">
-                            <h1>OUR ALL <span>BOTS</span> LIST</h1>
-                            <div class="links bot-link">
-                                <a class="magnet" href="https://t.me/Jarvisicon6bot"><button>Chat Gpt Bot
-                                        </button></a>
-                                <a class="magnet" href="https://t.me/Jarvisicon6bot"><button>reaction Bot
-                                        </button></a>
-                            </div>
-                        </div>
-                        <div class="abt-sec" id="sec4">
-                            <!-- this code is written by @biisal tg:biisal-files  -->
-                            <!-- stealing credit doesn't make you developer..so try to give full credit to the developer 😊 u will not loose anything for giving proper credit.   -->
-
-                            <p style="text-align: center;">We Can Tal'k For Your Support And You Can Report Through
-                                Telegram</p>
-                            <div class="links contact">
-                                <a href="https://t.me/Beautyofsupportbot"><button>Contact</button></a>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <footer>
-            <div class="mid">
-                <h1 class="mid-text">VISIT <a href="#sec3" onclick="bot_btn_clicked()"><span>OUR BOTS LIST</span></a>
-                    FOR
-                    MORE
-                    INFO</h1>
-            </div>
-
-            <div class="last-text">
-                <p style="font-weight: 500;">
-                    Welcome To Our Online Streaming Platform! Our Website Allows Users To Generate Streamable Links For
-                    Various Files Using Telegram Bots. Please Note That We Are Not Responsible For The Content Shared Or
-                    Streamed Through Our Service. Users Are Encouraged To Respect Copyright Laws And Adhere To Our
-                    Community
-                    Guidelines. Enjoy Easy, Hassle-Free File Streaming.
-                </p>
-            </div>
-            <center>
-
-                <div class="movie-cont">
-                    <a href="https://t.me/+PA8OPL2Zglk3MDM1">
-                        <div class="movieSug">
-                            <div class="movieDets">
-
-                            </div>
-                            <div class="movieimg">
-                                <img src="">
-                            </div>
-                        </div>
-                    </a>
-                    <div class="low-width-movie-dets">
-                        <div class="movieStsBar">
-                            <div class="movieDets-mini">
-
-                            </div>
-                        </div>
-                    </div>
-                    <button class="ranMovBtn" onclick="getDets()">Get More Movies Suggestion</button>
-                </div>
-
-            </center>
-            <!-- this code is written by @biisal tg:biisal-files  -->
-            <!-- stealing credit doesn't make you developer..so try to give full credit to the developer 😊 u will not loose anything for giving proper credit.   -->
-
-
-            <center>
-                <div class="copyright">
-                    <h5 class="text-center">Copyright © 2024 <a href="https://t.me/btmx_zone"><span
-                                style="font-weight: 700;">BTMX_ZONE™</span></a>. All
-                        Rights Reserved.</h5>
-                    <div class="icons">
-                        <a href="https://t.me/btmx_zone"><i class="fa-brands fa-telegram fa-lg"></i></a>
-                        
-                    </div>
-                    <h4 style="font-weight: 700;">This Page Is Made By <a
-                            href="https://t.me/btmx_zone"><span>BTMX_ZONE™</span></a></h4>
-                </div>
-            </center>
-        </footer>
-</body>
-
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.155.0/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/gh/automat/controlkit.js@master/bin/controlKit.min.js"></script>
-<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/sheryjs/dist/Shery.js"></script>
+<div class="page">
+<header class="top"><div class="brand"><b>●</b> STREAM</div><small>Secure movie player</small></header>
+<main class="hero">
+<section class="player-wrap">
+<video id="player" playsinline preload="metadata" controls src="{{file_url}}"></video>
+<div id="loading" class="loading"><div><div class="spinner"></div><div style="margin-top:10px">Switching stream…</div></div></div>
+</section>
+<section class="info">
+<div><div class="eyebrow">Now playing</div><h1 class="title">{{file_name}}</h1><div class="meta">{{file_size}} • HTML5 streaming • Range enabled</div></div>
+<div class="actions"><button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button><button class="btn primary" onclick="fastDownload()">⬇ Fast Download</button></div>
+</section>
+<section class="controls">
+<div class="control"><label>Quality</label><select id="quality"><option value="source">Auto / Source</option></select><div class="quality-note">More quality levels appear when separate sources are available.</div></div>
+<div class="control"><label>Language</label><select id="language"><option value="source">Original / Source</option></select><div class="quality-note">Language switching needs alternate audio/source tracks.</div></div>
+<div class="control"><label>Playback speed</label><select id="speed"><option>0.5</option><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>1.75</option><option>2</option></select></div>
+<div class="control"><label>Server</label><select id="server"><option value="auto">⚡ Auto (best load)</option><option value="0">Server 1</option><option value="1">Server 2</option><option value="2">Server 3</option><option value="3">Server 4</option></select></div>
+</section>
+<section class="download"><div><strong>🚀 Faster delivery</strong><span>Uses byte-range requests and automatically avoids an overloaded client when possible.</span></div><div class="server"><span class="dot"></span><span id="serverStatus" class="status">Auto server enabled</span><button class="btn primary" onclick="fastDownload()">Download</button></div></section>
+</main>
+<footer class="footer">Stream securely • Seeking supported • <a href="{{file_url}}">Open direct link</a></footer>
+</div>
 <script>
-    document.addEventListener("DOMContentLoaded", function () {
-        const uncopyableElement = document.querySelector(".uncopyable");
-
-        uncopyableElement.addEventListener("selectstart", function (event) {
-            event.preventDefault();
-        });
-    });
+const SERVER_COUNT={{server_count|int}};
+const serverOptions=document.querySelectorAll("#server option:not([value=\"auto\"])"); serverOptions.forEach((o,i)=>{if(i+1>SERVER_COUNT)o.remove()});
+const player=document.getElementById('player'), loading=document.getElementById('loading'), serverSel=document.getElementById('server'), statusEl=document.getElementById('serverStatus');
+const baseUrl={{file_url|tojson}}; let currentServer='auto', failovers=0, stallTimer=null;
+function urlForServer(s){const u=new URL(baseUrl,location.href);u.searchParams.set('hash',u.searchParams.get('hash')||'');if(s!=='auto')u.searchParams.set('server',s);else u.searchParams.delete('server');return u.toString()}
+function switchServer(s,keep=true){const pos=player.currentTime||0; currentServer=s; const next=urlForServer(s); loading.classList.add('show'); player.src=next; player.load(); player.addEventListener('loadedmetadata',()=>{if(keep&&pos>0)try{player.currentTime=pos}catch(e){}; loading.classList.remove('show');player.play().catch(()=>{});},{once:true}); statusEl.textContent=s==='auto'?'Auto server enabled':'Server '+(Number(s)+1)+' selected';}
+serverSel.addEventListener('change',e=>{failovers=0;switchServer(e.target.value)});
+document.getElementById('speed').addEventListener('change',e=>player.playbackRate=Number(e.target.value));
+player.addEventListener('waiting',()=>{clearTimeout(stallTimer);stallTimer=setTimeout(()=>{if(serverSel.value==='auto'&&failovers<3){failovers++;switchServer(String(failovers%4),true)}},8000)});
+player.addEventListener('playing',()=>{clearTimeout(stallTimer);loading.classList.remove('show')});
+player.addEventListener('error',()=>{if(serverSel.value==='auto'&&failovers<3){failovers++;switchServer(String(failovers%4),true)}else{loading.classList.remove('show');statusEl.textContent='Stream error — try another server'}});
+function fastDownload(){const u=new URL(baseUrl,location.href);u.searchParams.set('download','1');if(serverSel.value!=='auto')u.searchParams.set('server',serverSel.value);window.location.href=u.toString()}
+function toggleFullscreen(){const el=document.querySelector('.player-wrap');if(document.fullscreenElement)document.exitFullscreen();else el.requestFullscreen?.()}
 </script>
-<script src="js/wow.min.js"></script>
-<script>
-    new WOW().init();
-</script>
-<script src="https://cdn.plyr.io/3.6.9/plyr.js"></script>
-<script src="https://biisal.github.io/Resources/StreamJs.js"></script>
-<script src="script.js"></script>
-
-</html>
+</body></html>

@@ -69,9 +69,19 @@ async def stream_handler(request: web.Request):
 class_cache = {}
 
 async def media_streamer(request: web.Request, id: int, secure_hash: str):
-    range_header = request.headers.get("Range", 0)
-    
-    index = min(work_loads, key=work_loads.get)
+    range_header = request.headers.get("Range")
+
+    # Pick the least-loaded Telegram client by default; allow the web player
+    # to force a specific client when the current path is buffering.
+    requested_server = request.rel_url.query.get("server", "auto")
+    try:
+        requested_index = int(requested_server) if requested_server != "auto" else None
+    except (TypeError, ValueError):
+        requested_index = None
+    if requested_index in multi_clients and requested_index in work_loads:
+        index = requested_index
+    else:
+        index = min(work_loads, key=work_loads.get)
     faster_client = multi_clients[index]
     
     if MULTI_CLIENT:
@@ -94,15 +104,30 @@ async def media_streamer(request: web.Request, id: int, secure_hash: str):
     
     file_size = file_id.file_size
 
-    if range_header:
-        from_bytes, until_bytes = range_header.replace("bytes=", "").split("-")
-        from_bytes = int(from_bytes)
-        until_bytes = int(until_bytes) if until_bytes else file_size - 1
-    else:
-        from_bytes = request.http_range.start or 0
-        until_bytes = (request.http_range.stop or file_size) - 1
+    try:
+        if range_header:
+            raw = range_header.strip().lower()
+            if not raw.startswith("bytes="):
+                raise ValueError("invalid range unit")
+            spec = raw[6:].split(",", 1)[0].strip()
+            start_s, end_s = spec.split("-", 1)
+            if not start_s:
+                # Suffix range: bytes=-N
+                suffix = int(end_s)
+                if suffix <= 0:
+                    raise ValueError("invalid suffix")
+                from_bytes = max(file_size - suffix, 0)
+                until_bytes = file_size - 1
+            else:
+                from_bytes = int(start_s)
+                until_bytes = int(end_s) if end_s else file_size - 1
+        else:
+            from_bytes = request.http_range.start or 0
+            until_bytes = (request.http_range.stop or file_size) - 1
+    except (TypeError, ValueError):
+        return web.Response(status=416, headers={"Content-Range": f"bytes */{file_size}"}, text="416: Range not satisfiable")
 
-    if (until_bytes > file_size) or (from_bytes < 0) or (until_bytes < from_bytes):
+    if file_size <= 0 or (until_bytes >= file_size) or (from_bytes < 0) or (until_bytes < from_bytes):
         return web.Response(
             status=416,
             body="416: Range not satisfiable",
@@ -124,7 +149,7 @@ async def media_streamer(request: web.Request, id: int, secure_hash: str):
 
     mime_type = file_id.mime_type
     file_name = file_id.file_name
-    disposition = "attachment"
+    disposition = "attachment" if request.rel_url.query.get("download") == "1" else "inline"
 
     if mime_type:
         if not file_name:
@@ -148,5 +173,7 @@ async def media_streamer(request: web.Request, id: int, secure_hash: str):
             "Content-Length": str(req_length),
             "Content-Disposition": f'{disposition}; filename="{file_name}"',
             "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=60",
+            "X-Stream-Server": str(index),
         },
     )

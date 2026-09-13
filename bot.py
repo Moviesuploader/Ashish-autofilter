@@ -67,7 +67,7 @@ async def Deendayal_start():
     if DATABASE_URI2 and free_dbSize<62: #if the primary db have less than 62MB left, use second DB.
         tempDict["indexDB"] = DATABASE_URI2
         logging.info(f"Since Primary DB have only {free_dbSize} MB left, Secondary DB will be used to store datas.")
-    elif DATABASE_URI2 is None:
+    elif not DATABASE_URI2:
         logging.error("Missing second DB URI !\n\nAdd SECONDDB_URI now !\n\nExiting...")
         exit()
     else:

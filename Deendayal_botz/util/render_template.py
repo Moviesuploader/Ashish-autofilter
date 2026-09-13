@@ -4,6 +4,7 @@ import jinja2
 from info import *
 from Deendayal_botz.Bot import DeendayalBot
 from Deendayal_botz.util.human_readable import humanbytes
+from Deendayal_botz.Bot import multi_clients
 from Deendayal_botz.util.file_properties import get_file_ids
 from Deendayal_botz.server.exceptions import InvalidHash
 import urllib.parse
@@ -44,4 +45,5 @@ async def render_page(id, secure_hash, src=None):
         file_url=src,
         file_size=file_size,
         file_unique_id=file_data.unique_id,
+        server_count=max(1, len(multi_clients)),
     )
