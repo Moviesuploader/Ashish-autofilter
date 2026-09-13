@@ -77,19 +77,19 @@ async def ensure_payment_indexes():
     await PAYMENTS.create_index(
         [("tx_hash", ASCENDING)],
         unique=True,
-        partialFilterExpression={"tx_hash": {"$type": "string"}},
+        partialFilterExpression={"tx_hash": {"$exists": True, "$nin": [None, ""]}},
         name="uniq_crypto_tx_hash",
     )
     await PAYMENTS.create_index(
         [("payment_type", ASCENDING), ("utr", ASCENDING)],
         unique=True,
-        partialFilterExpression={"payment_type": "upi", "utr": {"$type": "string"}},
+        partialFilterExpression={"payment_type": "upi", "utr": {"$exists": True, "$nin": [None, ""]}},
         name="uniq_upi_utr",
     )
     await PAYMENTS.create_index(
         [("telegram_payment_charge_id", ASCENDING)],
         unique=True,
-        partialFilterExpression={"telegram_payment_charge_id": {"$type": "string"}},
+        partialFilterExpression={"telegram_payment_charge_id": {"$exists": True, "$nin": [None, ""]}},
         name="uniq_stars_charge_id",
     )
 
@@ -715,7 +715,7 @@ async def admin_payment_action(client, query, ref, approve):
     except Exception:pass
     await query.answer("Premium activated successfully.")
 
-@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
+@Client.on_message(filters.private & filters.text & ~filters.command)
 async def premium_payment_text_handler(client, message):
     # Only consume text when this user has a payment waiting for a UTR.
     p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_utr"},sort=[("created_at",-1)])

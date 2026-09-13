@@ -3,6 +3,7 @@ import glob
 import importlib
 from pathlib import Path
 from pyrogram import Client, idle, __version__
+from pyrogram.errors import FloodWait
 from pyrogram.raw.all import layer
 import logging
 import logging.config
@@ -37,10 +38,52 @@ botStartTime = time.time()
 ppath = "plugins/*.py"
 files = glob.glob(ppath)
 
+async def _start_health_server():
+    """Start the HTTP health endpoint before Telegram authorization.
+
+    This keeps Koyeb health checks green even when Telegram asks the bot to
+    wait before ImportBotAuthorization can be retried.
+    """
+    app = web.AppRunner(await web_server())
+    await app.setup()
+    bind_address = "0.0.0.0"
+    await web.TCPSite(app, bind_address, PORT).start()
+    logging.info("Health server listening on %s:%s", bind_address, PORT)
+    return app
+
+
+async def _safe_start_bot(client):
+    """Authorize once at a time and obey Telegram FLOOD_WAIT without crashing.
+
+    A process crash during ImportBotAuthorization makes platforms such as
+    Koyeb restart the container, which immediately retries authorization and
+    can extend the flood wait.  Staying alive and sleeping is the safe path.
+    """
+    while True:
+        try:
+            await client.start()
+            return
+        except FloodWait as e:
+            wait_seconds = max(1, int(getattr(e, "value", 0) or 0))
+            # Small cushion prevents retrying on the exact Telegram boundary.
+            wait_seconds += 3
+            logging.warning(
+                "Telegram FLOOD_WAIT during bot authorization. Waiting %s seconds; "
+                "the health server will remain online and authorization will retry once.",
+                wait_seconds,
+            )
+            await asyncio.sleep(wait_seconds)
+
+
 async def Deendayal_start():
     print('\n')
     print('\nInitalizing Deendayal_Botz')
-    await DeendayalBot.start()
+    health_runner = await _start_health_server()
+    try:
+        await _safe_start_bot(DeendayalBot)
+    except Exception:
+        await health_runner.cleanup()
+        raise
     bot_info = await DeendayalBot.get_me()
     DeendayalBot.username = bot_info.username
     await initialize_clients()
@@ -107,11 +150,10 @@ async def Deendayal_start():
     now = datetime.now(tz)
     time = now.strftime("%H:%M:%S %p")
     await DeendayalBot.send_message(chat_id=LOG_CHANNEL, text=script.RESTART_TXT.format(temp.B_LINK, today, time))
-    app = web.AppRunner(await web_server())
-    await app.setup()
-    bind_address = "0.0.0.0"
-    await web.TCPSite(app, bind_address, PORT).start()
-    await idle()
+    try:
+        await idle()
+    finally:
+        await health_runner.cleanup()
     
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
