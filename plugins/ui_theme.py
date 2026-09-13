@@ -62,6 +62,48 @@ def navigation(back=True, home=True, close=False):
         row.append(CLOSE)
     return row
 
+
+def home_caption(name, greeting, bot_name):
+    return (
+        f"<b>🎬 {bot_name}</b>\n"
+        f"<i>Your personal movie & series hub</i>\n\n"
+        f"{greeting}, <b>{name}</b> 👋\n\n"
+        "🔎 <b>Search instantly</b> for movies & series\n"
+        "🎞️ Browse available qualities & languages\n"
+        "⭐ Unlock a smoother ad-free experience\n\n"
+        "<b>🍿 What are you watching today?</b>"
+    )
+
+def home_keyboard():
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(SEARCH, callback_data="ui_search")],
+        [InlineKeyboardButton(LATEST, callback_data="topsearch"),
+         InlineKeyboardButton(PREMIUM, callback_data="premium_info")],
+        [InlineKeyboardButton(REQUEST, callback_data="ui_request"),
+         InlineKeyboardButton(SUPPORT, callback_data="channels")],
+        [InlineKeyboardButton(HELP, callback_data="ui_help"),
+         InlineKeyboardButton(ABOUT, callback_data="ui_about")],
+        [InlineKeyboardButton(SHARE, switch_inline_query="")],
+    ])
+
+def inner_keyboard(*, back="ui_home", home="ui_home"):
+    from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    rows = []
+    if back and home:
+        rows.append([InlineKeyboardButton(BACK, callback_data=back),
+                     InlineKeyboardButton(HOME, callback_data=home)])
+    elif back:
+        rows.append([InlineKeyboardButton(BACK, callback_data=back)])
+    elif home:
+        rows.append([InlineKeyboardButton(HOME, callback_data=home)])
+    return InlineKeyboardMarkup(rows)
+
+def result_nav():
+    from pyrogram.types import InlineKeyboardButton
+    return [InlineKeyboardButton(BACK, callback_data="ui_home"),
+            InlineKeyboardButton(HOME, callback_data="ui_home")]
+
 def reply_keyboard():
     """Persistent PM navigation keyboard."""
     from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton
