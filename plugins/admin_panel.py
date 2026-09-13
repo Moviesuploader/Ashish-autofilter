@@ -1,7 +1,7 @@
 import asyncio, os, time
 from datetime import datetime, timezone
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BotCommandScopeChat, ReplyKeyboardRemove
 from info import ADMINS, PICS
 from database.users_chats_db import db
 from database.config_db import mdb
@@ -33,7 +33,7 @@ async def dashboard_text():
         pass
     pending_pay = 0
     try:
-        pending_pay = await mdb.db["premium_payments"].count_documents({"status": {"$in": ["awaiting_utr", "pending_review"]}})
+        pending_pay = await mdb.db["premium_payments"].count_documents({"status": {"$in": ["awaiting_proof", "awaiting_utr", "awaiting_screenshot", "pending_review"]}})
     except Exception:
         pass
     s = await get_all_settings()
@@ -50,6 +50,7 @@ def dashboard_kb():
         [InlineKeyboardButton("📩 Requests", callback_data="adm_page:requests"), InlineKeyboardButton("🎬 Catalogue", callback_data="adm_page:catalogue")],
         [InlineKeyboardButton("👥 Users", callback_data="adm_page:users"), InlineKeyboardButton("📢 Broadcast", callback_data="adm_page:broadcast")],
         [InlineKeyboardButton("🛡️ Security & Logs", callback_data="adm_page:security")],
+        [InlineKeyboardButton("⌨️ Show Menu Keyboard", callback_data="adm_show_keyboard")],
         [InlineKeyboardButton("🔄 Refresh", callback_data="adm_refresh")]
     ])
 
@@ -69,7 +70,7 @@ async def render_page(key):
               row("🧹 Auto Delete", s.get("auto_delete_enabled"), "auto_delete_enabled"),
               [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
     elif key == "payments":
-        text = "💳 <b>PAYMENT METHODS</b>\n━━━━━━━━━━━━━━━━━━\nOnly enabled methods will appear to users."
+        text = "💳 <b>PAYMENT METHODS</b>\n━━━━━━━━━━━━━━━━━━\nOnly enabled methods will appear to users.\n\n💎 <b>Premium Plans</b> can be enabled/disabled and edited from Manage Plans."
         kb = [row("💳 UPI", s.get("payment_upi_enabled"), "payment_upi_enabled"), row("🪙 Crypto", s.get("payment_crypto_enabled"), "payment_crypto_enabled"), row("⭐ Telegram Stars", s.get("payment_stars_enabled"), "payment_stars_enabled"), [InlineKeyboardButton("💎 Manage Plans", callback_data="adm_plans")], [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
     elif key == "channels":
         def fmt(v): return "Not set" if not v else f"<code>{v}</code>"
@@ -113,8 +114,27 @@ async def render_page(key):
         kb = [[InlineKeyboardButton("📜 Admin Activity", callback_data="adm_logs")], [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
     return text, InlineKeyboardMarkup(kb)
 
+async def _hide_admin_reply_keyboard(client, chat_id):
+    """Remove the normal user Reply Keyboard while admin UI is open."""
+    try:
+        notice = await client.send_message(int(chat_id), "⌨️", reply_markup=ReplyKeyboardRemove())
+        await asyncio.sleep(0.15)
+        await notice.delete()
+    except Exception:
+        pass
+
+
+async def _show_admin_reply_keyboard(client, chat_id):
+    try:
+        from .ui_theme import reply_keyboard
+        await client.send_message(int(chat_id), "⌨️ <b>Menu keyboard enabled.</b>", reply_markup=reply_keyboard(), parse_mode=enums.ParseMode.HTML)
+    except Exception:
+        pass
+
+
 @Client.on_message(filters.command("admin") & filters.user(ADMINS))
 async def admin_panel(client, message):
+    await _hide_admin_reply_keyboard(client, message.chat.id)
     await ensure_settings(); await ensure_indexes()
     await log_admin_action(message.from_user.id, "open_panel")
     await message.reply_text(await dashboard_text(), reply_markup=dashboard_kb(), parse_mode=enums.ParseMode.HTML)
@@ -124,6 +144,10 @@ async def admin_callbacks(client, query):
     if query.from_user.id not in ADMINS:
         return await query.answer("Admins only.", show_alert=True)
     data = query.data
+    await _hide_admin_reply_keyboard(client, query.message.chat.id)
+    if data == "adm_show_keyboard":
+        await _show_admin_reply_keyboard(client, query.message.chat.id)
+        return await query.answer("Menu keyboard enabled.")
     if data == "adm_home" or data == "adm_refresh":
         return await query.message.edit_text(await dashboard_text(), reply_markup=dashboard_kb(), parse_mode=enums.ParseMode.HTML)
     if data.startswith("adm_page:"):
@@ -142,6 +166,31 @@ async def admin_callbacks(client, query):
             pass
         page = "controls" if key in {"maintenance_mode","shortener_enabled","content_forwarding_enabled","pm_search_enabled","movie_updates_enabled","request_system_enabled","streaming_enabled","verification_enabled","force_sub_enabled","auto_delete_enabled"} else ("payments" if key.startswith("payment_") else ("channels" if key in {"auth_enabled","backup_enabled","logging_enabled"} else "referral"))
         text, kb = await render_page(page); return await query.message.edit_text(text, reply_markup=kb, parse_mode=enums.ParseMode.HTML)
+    if data.startswith("adm_plan_toggle:"):
+        key = data.split(":", 1)[1]
+        from plugins.payment_system import PLANS
+        if key not in PLANS:
+            return await query.answer("Unknown plan.", show_alert=True)
+        plans = await get_setting("premium_plans", {}) or {}
+        cfg = dict(plans.get(key, {})) if isinstance(plans, dict) else {}
+        cfg["enabled"] = not bool(cfg.get("enabled", True))
+        plans[key] = cfg
+        await set_setting("premium_plans", plans, query.from_user.id)
+        await query.answer(f"{PLANS[key]['name']}: {'ON' if cfg['enabled'] else 'OFF'}")
+        # Re-render manager.
+        plans = await get_setting("premium_plans", {}) or {}
+        rows = []
+        lines = ["💎 <b>PREMIUM PLAN MANAGER</b>", "━━━━━━━━━━━━━━━━━━", "Tap a plan to enable/disable it. Use /setplan KEY PRICE DAYS to change price or duration.", ""]
+        for k, base in PLANS.items():
+            c = plans.get(k, {}) if isinstance(plans, dict) else {}
+            en = bool(c.get("enabled", True)); price = c.get("price", base["price"]); days = c.get("days", base["days"])
+            lines.append(f"{base['name']}  •  ₹{price} / {days} days  •  <b>{'ON' if en else 'OFF'}</b>")
+            rows.append([InlineKeyboardButton(f"{base['name']} {'🟢' if en else '🔴'}", callback_data=f"adm_plan_toggle:{k}"), InlineKeyboardButton("✏️ Edit", callback_data=f"adm_plan_edit:{k}")])
+        rows.append([InlineKeyboardButton("🔙 Payments", callback_data="adm_page:payments")])
+        return await query.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode=enums.ParseMode.HTML)
+    if data.startswith("adm_plan_edit:"):
+        key = data.split(":", 1)[1]
+        return await query.answer(f"Use /setplan {key} PRICE DAYS — example: /setplan {key} 25 30", show_alert=True)
     if data.startswith("adm_setchannel:"):
         target = data.split(":",1)[1]
         pending_channels[query.from_user.id] = target
@@ -154,7 +203,19 @@ async def admin_callbacks(client, query):
     if data == "adm_ref_redeem":
         return await query.answer("Default: 20 points → 10 days Premium. Change with /refredeem POINTS DAYS.", show_alert=True)
     if data == "adm_plans":
-        return await query.answer("Premium plans remain managed by payment_system.py; this panel controls payment-method availability.", show_alert=True)
+        plans = s = await get_setting("premium_plans", {}) or {}
+        from plugins.payment_system import PLANS
+        lines = ["💎 <b>PREMIUM PLAN MANAGER</b>", "━━━━━━━━━━━━━━━━━━", "Tap a plan to enable/disable it. Use /setplan KEY PRICE DAYS to change price or duration.", ""]
+        rows = []
+        for key, base in PLANS.items():
+            cfg = plans.get(key, {}) if isinstance(plans, dict) else {}
+            enabled = bool(cfg.get("enabled", True))
+            price = cfg.get("price", base["price"])
+            days = cfg.get("days", base["days"])
+            lines.append(f"{base['name']}  •  ₹{price} / {days} days  •  <b>{'ON' if enabled else 'OFF'}</b>")
+            rows.append([InlineKeyboardButton(f"{base['name']} {'🟢' if enabled else '🔴'}", callback_data=f"adm_plan_toggle:{key}"), InlineKeyboardButton("✏️ Edit", callback_data=f"adm_plan_edit:{key}")])
+        rows.append([InlineKeyboardButton("🔙 Payments", callback_data="adm_page:payments")])
+        return await query.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows), parse_mode=enums.ParseMode.HTML)
     if data == "adm_logs":
         docs = await mdb.db["admin_activity_logs"].find({}).sort("created_at", -1).to_list(length=10)
         lines = ["📜 <b>RECENT ADMIN ACTIVITY</b>", "━━━━━━━━━━━━━━━━━━"] + [f"• {d.get('action')} — {d.get('admin_id')}" for d in docs]
@@ -186,6 +247,27 @@ async def admin_channel_forward(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Could not set channel. Make sure the bot is a member/admin there.\n<code>{e}</code>", parse_mode=enums.ParseMode.HTML)
 
+@Client.on_message(filters.command("setplan") & filters.user(ADMINS))
+async def setplan_command(client, message):
+    from plugins.payment_system import PLANS
+    if len(message.command) != 4:
+        return await message.reply_text("Usage: /setplan KEY PRICE DAYS\nExample: /setplan gold 45 30")
+    key = message.command[1].lower()
+    if key not in PLANS:
+        return await message.reply_text("❌ Unknown plan. Available: " + ", ".join(PLANS))
+    try:
+        price = float(message.command[2]); days = int(message.command[3])
+        if price <= 0 or days <= 0: raise ValueError
+    except ValueError:
+        return await message.reply_text("❌ PRICE must be > 0 and DAYS must be a positive integer.")
+    plans = await get_setting("premium_plans", {}) or {}
+    cfg = dict(plans.get(key, {})) if isinstance(plans, dict) else {}
+    cfg.update({"price": price, "days": days})
+    plans[key] = cfg
+    await set_setting("premium_plans", plans, message.from_user.id)
+    await message.reply_text(f"✅ {PLANS[key]['name']} updated: ₹{price:g} / {days} days.")
+
+
 @Client.on_message(filters.command("refreward") & filters.user(ADMINS))
 async def refreward(client, message):
     if len(message.command) != 2 or not message.command[1].isdigit(): return await message.reply_text("Usage: /refreward POINTS")
@@ -199,7 +281,7 @@ async def refredeem(client, message):
 async def sync_bot_profile(bot):
     await ensure_settings(); await ensure_indexes()
     user_cmds = [BotCommand("start", "Start the bot"), BotCommand("search", "Search movies & series"), BotCommand("premium", "View premium plans"), BotCommand("myplan", "Check premium status"), BotCommand("request", "Request a movie"), BotCommand("refer", "Refer & earn Premium credit"), BotCommand("help", "Get help"), BotCommand("about", "About the bot")]
-    admin_cmds = user_cmds + [BotCommand("admin", "Open Admin Panel"), BotCommand("stats", "Bot statistics"), BotCommand("broadcast", "Broadcast to users"), BotCommand("grp_broadcast", "Broadcast to groups"), BotCommand("add_premium", "Add Premium"), BotCommand("remove_premium", "Remove Premium"), BotCommand("premium_users", "List Premium users"), BotCommand("deletefiles", "Delete indexed files"), BotCommand("restart", "Restart the bot"), BotCommand("logs", "View logs")]
+    admin_cmds = user_cmds + [BotCommand("admin", "Open Admin Panel"), BotCommand("stats", "Bot statistics"), BotCommand("broadcast", "Broadcast to users"), BotCommand("grp_broadcast", "Broadcast to groups"), BotCommand("add_premium", "Add Premium"), BotCommand("remove_premium", "Remove Premium"), BotCommand("premium_users", "List Premium users"), BotCommand("deletefiles", "Delete indexed files"), BotCommand("restart", "Restart the bot"), BotCommand("logs", "View logs"), BotCommand("setplan", "Set Premium price & days"), BotCommand("refreward", "Set referral reward"), BotCommand("refredeem", "Set referral redemption")]
     try: await bot.set_bot_commands(user_cmds)
     except Exception: pass
     try: await bot.set_my_short_description("🎬 Search • Download • Stream • Premium • Requests • Referral Rewards")

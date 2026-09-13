@@ -118,7 +118,7 @@ async def pm_quick_keyboard(client, message):
             "💳 UPI → Screenshot / UTR + admin verification\n"
             "🪙 Crypto → Automatic blockchain verification\n"
             "⭐ Telegram Stars → Native Telegram payment + automatic activation",
-            reply_markup=plan_keyboard(),
+            reply_markup=await plan_keyboard(),
             parse_mode=enums.ParseMode.HTML,
         )
         return
@@ -295,7 +295,7 @@ async def start(client, message):
             "💳 UPI → Screenshot / UTR + admin verification\n"
             "🪙 Crypto → Automatic blockchain verification\n"
             "⭐ Telegram Stars → Native Telegram payment + automatic activation",
-            reply_markup=plan_keyboard(),
+            reply_markup=await plan_keyboard(),
             parse_mode=enums.ParseMode.HTML,
         )
         return

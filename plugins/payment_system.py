@@ -26,6 +26,29 @@ PLANS = {
     "diamond": {"name": "💎 Diamond", "days": 60, "price": Decimal("75")},
 }
 
+async def get_plan(plan_key):
+    """Return the runtime plan, with safe DB overrides from Admin Panel."""
+    base = PLANS.get(plan_key)
+    if not base:
+        return None
+    try:
+        overrides = await get_setting("premium_plans", {}) or {}
+        cfg = overrides.get(plan_key, {}) if isinstance(overrides, dict) else {}
+        return {
+            "name": base["name"],
+            "days": max(1, int(cfg.get("days", base["days"]))),
+            "price": Decimal(str(cfg.get("price", base["price"]))),
+            "enabled": bool(cfg.get("enabled", True)),
+        }
+    except Exception:
+        return {**base, "enabled": True}
+
+async def get_runtime_plans():
+    result = {}
+    for key in PLANS:
+        result[key] = await get_plan(key)
+    return result
+
 BSC_RPC_URL = os.getenv("BSC_RPC_URL", "https://bsc-rpc.publicnode.com")
 BSC_RPC_FALLBACK_URLS = [x.strip() for x in os.getenv("BSC_RPC_FALLBACK_URLS", "").split(",") if x.strip()]
 TRON_API_URL = os.getenv("TRON_API_URL", "https://api.trongrid.io")
@@ -98,15 +121,16 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def plan_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🥉 Bronze • ₹10 / 7 Days", callback_data="payplan_bronze")],
-        [InlineKeyboardButton("🥈 Silver • ₹20 / 15 Days", callback_data="payplan_silver")],
-        [InlineKeyboardButton("🥇 Gold • ₹40 / 30 Days", callback_data="payplan_gold")],
-        [InlineKeyboardButton("💘 Platinum • ₹55 / 45 Days", callback_data="payplan_platinum")],
-        [InlineKeyboardButton("💎 Diamond • ₹75 / 60 Days", callback_data="payplan_diamond")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="premium_info")],
-    ])
+async def plan_keyboard():
+    rows = []
+    plans = await get_runtime_plans()
+    for key, p in plans.items():
+        if p.get("enabled", True):
+            rows.append([InlineKeyboardButton(f"{p['name']} • ₹{p['price']:.0f} / {p['days']} Days", callback_data=f"payplan_{key}")])
+    if not rows:
+        rows.append([InlineKeyboardButton("⚠️ No plans available", callback_data="premium_info")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="premium_info")])
+    return InlineKeyboardMarkup(rows)
 
 
 def method_keyboard(plan_key):
@@ -128,7 +152,7 @@ async def async_method_keyboard(plan_key):
     if await get_setting("payment_crypto_enabled", True):
         rows.append([InlineKeyboardButton("🪙 USDT / Crypto • Automatic", callback_data=f"paycrypto_{plan_key}")])
     if STARS_ENABLED and await get_setting("payment_stars_enabled", True):
-        rows.append([InlineKeyboardButton(f"⭐ Telegram Stars • {stars_amount(PLANS[plan_key]['price'])} XTR", callback_data=f"paystars_{plan_key}")])
+        rows.append([InlineKeyboardButton(f"⭐ Telegram Stars • {stars_amount((await get_plan(plan_key))['price'])} XTR", callback_data=f"paystars_{plan_key}")])
     rows.append([InlineKeyboardButton("⬅️ Change Plan", callback_data="payplans")])
     return InlineKeyboardMarkup(rows)
 
@@ -382,9 +406,11 @@ async def start_stars(client, query, plan_key):
         return await query.answer("Telegram Stars payment is disabled by admin.", show_alert=True)
     if not STARS_ENABLED:
         return await query.answer("Telegram Stars payment is currently unavailable.", show_alert=True)
-    p = PLANS.get(plan_key)
+    p = await get_plan(plan_key)
     if not p:
         return await query.answer("Invalid plan.", show_alert=True)
+    if not p.get("enabled", True):
+        return await query.answer("This Premium plan is currently disabled by admin.", show_alert=True)
     amount = stars_amount(p["price"])
     order = f"STARS-{query.from_user.id}-{uuid.uuid4().hex[:12].upper()}"
     now = _now()
@@ -419,7 +445,7 @@ async def start_stars(client, query, plan_key):
     except Exception as e:
         await PAYMENTS.update_one({"_id": result.inserted_id, "status": "pending"}, {"$set": {"status": "failed", "error": str(e)[:500], "failed_at": _now()}})
         try:
-            await query.message.edit_text("⚠️ Telegram Stars invoice could not be created. Please choose another payment method or try again.", reply_markup=method_keyboard(plan_key))
+            await query.message.edit_text("⚠️ Telegram Stars invoice could not be created. Please choose another payment method or try again.", reply_markup=await async_method_keyboard(plan_key))
         except Exception:
             pass
         return
@@ -479,7 +505,7 @@ async def stars_successful_payment_handler(client, message):
     try:
         await message.reply_text(
             f"🎉 <b>Telegram Stars Payment Successful!</b>\n\n"
-            f"💎 Plan: <b>{PLANS[claim['plan']]['name']}</b>\n"
+            f"💎 Plan: <b>{(await get_plan(claim['plan']))['name']}</b>\n"
             f"⭐ Paid: <b>{claim['amount_stars']} Stars</b>\n"
             f"⏰ Duration: <b>{claim['days']} days</b>\n\n"
             f"✅ <b>Premium is now active.</b>\n"
@@ -502,8 +528,9 @@ async def _stars_success_event(client, message):
 
 
 async def show_plan_checkout(client, query, plan_key):
-    p=PLANS.get(plan_key)
-    if not p:return
+    p=await get_plan(plan_key)
+    if not p or not p.get("enabled", True):
+        return await query.answer("This Premium plan is currently disabled by admin.", show_alert=True)
     methods = []
     if await get_setting("payment_upi_enabled", True): methods.append("💳 UPI = screenshot/UTR + admin verification")
     if await get_setting("payment_crypto_enabled", True): methods.append("🪙 Crypto = automatic blockchain verification")
@@ -517,8 +544,11 @@ async def show_plan_checkout(client, query, plan_key):
 async def start_upi(client, query, plan_key):
     if not await get_setting("payment_upi_enabled", True):
         return await query.answer("UPI payment is disabled by admin.", show_alert=True)
-    p=PLANS[plan_key]; order=f"UPI-{query.from_user.id}-{uuid.uuid4().hex[:10].upper()}"
-    doc={"order_id":order,"user_id":query.from_user.id,"plan":plan_key,"days":p["days"],"amount_inr":float(p["price"]),"payment_type":"upi","status":"awaiting_utr","created_at":_now(),"expires_at":_now()+timedelta(minutes=int(os.getenv("UPI_PAYMENT_EXPIRY_MINUTES","60")))}
+    p=await get_plan(plan_key)
+    if not p or not p.get("enabled", True):
+        return await query.answer("This Premium plan is currently disabled by admin.", show_alert=True)
+    order=f"UPI-{query.from_user.id}-{uuid.uuid4().hex[:10].upper()}"
+    doc={"order_id":order,"user_id":query.from_user.id,"plan":plan_key,"days":p["days"],"amount_inr":float(p["price"]),"payment_type":"upi","status":"awaiting_proof","created_at":_now(),"expires_at":_now()+timedelta(minutes=int(os.getenv("UPI_PAYMENT_EXPIRY_MINUTES","60")))}
     res=await PAYMENTS.insert_one(doc); ref=str(res.inserted_id)
     uri=_upi_uri(p["price"],order)
     text=(f"💳 <b>UPI PAYMENT</b>\n━━━━━━━━━━━━━━━━━━\n\n{p['name']} • {p['days']} Days\n💰 Exact Amount: <b>₹{p['price']:.2f}</b>\n\n📌 UPI ID: <code>{OWNER_UPI_ID}</code>\n🧾 Order ID: <code>{order}</code>\n\n1️⃣ Pay the exact amount.\n2️⃣ Tap <b>I've Paid</b>.\n3️⃣ Submit either your <b>UTR / transaction reference</b> OR a <b>payment screenshot</b>.\n4️⃣ Admin will verify the proof manually. <b>Premium activates only after approval.</b>\n\n⚠️ Screenshot must clearly show the payment status, amount and transaction/reference details.\n⚠️ Do not send OTP, UPI PIN or banking password.")
@@ -540,7 +570,10 @@ async def start_crypto(client, query, plan_key):
 async def start_crypto_order(client, query, plan_key, network_key):
     if not await get_setting("payment_crypto_enabled", True):
         return await query.answer("Crypto payment is disabled by admin.", show_alert=True)
-    p=PLANS[plan_key]; name,symbol,network,address,decimals=NETWORKS[network_key]
+    p=await get_plan(plan_key)
+    if not p or not p.get("enabled", True):
+        return await query.answer("This Premium plan is currently disabled by admin.", show_alert=True)
+    name,symbol,network,address,decimals=NETWORKS[network_key]
     if not address:
         return await query.answer("This network is not configured by admin.",show_alert=True)
     try: amount,rate=await crypto_amount(p["price"],network_key)
@@ -560,7 +593,7 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
     proof_line = f"🔢 UTR: <code>{proof_value}</code>" if proof_value else "📸 Proof: <b>Payment screenshot attached</b>"
     admin_text = (f"🔔 <b>NEW UPI PAYMENT REVIEW</b>\n━━━━━━━━━━━━━━━━━━\n\n"
                   f"👤 User ID: <code>{p['user_id']}</code>\n"
-                  f"💎 Plan: <b>{PLANS[p['plan']]['name']}</b>\n"
+                  f"💎 Plan: <b>{(await get_plan(p['plan']))['name']}</b>\n"
                   f"⏰ Days: {p['days']}\n"
                   f"💰 Amount: ₹{p['amount_inr']:.2f}\n"
                   f"🧾 Order: <code>{p['order_id']}</code>\n"
@@ -597,12 +630,12 @@ async def submit_utr(client, message, ref):
         return
     try: oid=ObjectId(ref)
     except Exception:return
-    p0=await PAYMENTS.find_one({"_id":oid,"user_id":message.from_user.id,"status":"awaiting_utr"})
+    p0=await PAYMENTS.find_one({"_id":oid,"user_id":message.from_user.id,"status":"awaiting_utr","proof_mode":"utr"})
     if not p0:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
     if p0.get("expires_at") and p0["expires_at"] <= _now():
-        await PAYMENTS.update_one({"_id":oid,"status":"awaiting_utr"},{"$set":{"status":"expired","expired_at":_now()}})
+        await PAYMENTS.update_one({"_id":oid,"status":"awaiting_utr","proof_mode":"utr"},{"$set":{"status":"expired","expired_at":_now()}})
         await message.reply_text("⏰ This UPI payment request has expired. Please create a new payment.")
         return
     duplicate=await PAYMENTS.find_one({"payment_type":"upi","utr":utr,"_id":{"$ne":oid},"status":{"$in":["pending_review","processing","finished","cancelled_review"]}})
@@ -610,7 +643,7 @@ async def submit_utr(client, message, ref):
         await message.reply_text("❌ This UTR/reference has already been submitted for another payment order. Please check the transaction reference and submit the correct one.")
         return
     p=await PAYMENTS.find_one_and_update(
-        {"_id":oid,"user_id":message.from_user.id,"status":"awaiting_utr"},
+        {"_id":oid,"user_id":message.from_user.id,"status":"awaiting_utr","proof_mode":"utr"},
         {"$set":{"utr":utr,"status":"pending_review","proof_type":"utr","utr_submitted_at":_now(),"proof_submitted_at":_now()}},
         return_document=ReturnDocument.AFTER)
     if not p:
@@ -625,16 +658,16 @@ async def submit_screenshot(client, message, ref):
         return
     try: oid=ObjectId(ref)
     except Exception:return
-    p0=await PAYMENTS.find_one({"_id":oid,"user_id":message.from_user.id,"status":"awaiting_utr"})
+    p0=await PAYMENTS.find_one({"_id":oid,"user_id":message.from_user.id,"status":"awaiting_screenshot"})
     if not p0:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
     if p0.get("expires_at") and p0["expires_at"] <= _now():
-        await PAYMENTS.update_one({"_id":oid,"status":"awaiting_utr"},{"$set":{"status":"expired","expired_at":_now()}})
+        await PAYMENTS.update_one({"_id":oid,"status":"awaiting_screenshot"},{"$set":{"status":"expired","expired_at":_now()}})
         await message.reply_text("⏰ This UPI payment request has expired. Please create a new payment.")
         return
     p=await PAYMENTS.find_one_and_update(
-        {"_id":oid,"user_id":message.from_user.id,"status":"awaiting_utr"},
+        {"_id":oid,"user_id":message.from_user.id,"status":"awaiting_screenshot"},
         {"$set":{"status":"pending_review","proof_type":"screenshot","screenshot_file_id":str(photo.file_id),"screenshot_media_type":"photo","screenshot_submitted_at":_now(),"proof_submitted_at":_now()}},
         return_document=ReturnDocument.AFTER)
     if not p:
@@ -653,7 +686,7 @@ async def _copy_payment_to_logs(client, p, note="🗂 MOVED TO PAYMENT LOGS"):
     proof = f"🔢 UTR: <code>{p.get('utr')}</code>" if p.get('utr') else "📸 Proof: <b>Payment screenshot attached</b>"
     text=(f"🗂 <b>PAYMENT LOGS • UPI REVIEW</b>\n━━━━━━━━━━━━━━━━━━\n\n"
           f"👤 User ID: <code>{p['user_id']}</code>\n"
-          f"💎 Plan: <b>{PLANS[p['plan']]['name']}</b>\n"
+          f"💎 Plan: <b>{(await get_plan(p['plan']))['name']}</b>\n"
           f"⏰ Days: {p['days']}\n💰 Amount: ₹{p['amount_inr']:.2f}\n"
           f"🧾 Order: <code>{p['order_id']}</code>\n{proof}\n\n"
           f"{note}\n✅ Approval option is still available here.")
@@ -695,7 +728,7 @@ async def admin_payment_action(client, query, ref, approve):
                 await query.message.edit_text((query.message.text or "")+"\n\n🗂 <b>CANCELLED / MOVED TO PAYMENT LOGS</b>",reply_markup=None,parse_mode="HTML")
         except Exception: pass
         await _copy_payment_to_logs(client, changed)
-        try: await client.send_message(p["user_id"],f"ℹ️ Your UPI payment proof for <b>{PLANS[p['plan']]['name']}</b> is still under review.\n\n🧾 Order: <code>{p['order_id']}</code>",parse_mode="HTML")
+        try: await client.send_message(p["user_id"],f"ℹ️ Your UPI payment proof for <b>{(await get_plan(p['plan']))['name']}</b> is still under review.\n\n🧾 Order: <code>{p['order_id']}</code>",parse_mode="HTML")
         except Exception: pass
         return await query.answer("Moved to Payment Logs. Approval is still available there.")
     claimed=await PAYMENTS.find_one_and_update(
@@ -711,57 +744,25 @@ async def admin_payment_action(client, query, ref, approve):
         else:
             await query.message.edit_text((query.message.text or "")+f"\n\n✅ <b>APPROVED & PREMIUM ACTIVATED</b>\n⏳ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>",reply_markup=None,parse_mode="HTML")
     except Exception: pass
-    try: await client.send_message(p["user_id"],f"🎉 <b>Premium activated!</b>\n\n💎 Plan: {PLANS[p['plan']]['name']}\n⏰ Duration: {p['days']} days\n🧾 Order: <code>{p['order_id']}</code>\n\n⌛ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>\n\nThank you for your purchase! ❤️",parse_mode="HTML")
+    try: await client.send_message(p["user_id"],f"🎉 <b>Premium activated!</b>\n\n💎 Plan: {(await get_plan(p['plan']))['name']}\n⏰ Duration: {p['days']} days\n🧾 Order: <code>{p['order_id']}</code>\n\n⌛ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>\n\nThank you for your purchase! ❤️",parse_mode="HTML")
     except Exception:pass
     await query.answer("Premium activated successfully.")
 
 @Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
 async def premium_payment_text_handler(client, message):
     # Only consume text when this user has a payment waiting for a UTR.
-    p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_utr"},sort=[("created_at",-1)])
+    p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_utr","proof_mode":"utr"},sort=[("created_at",-1)])
     if not p:return
     await submit_utr(client,message,str(p["_id"]))
 
 
-
-@Client.on_message(filters.private & filters.document)
-async def premium_payment_document_screenshot_handler(client, message):
-    # Accept screenshots sent as image documents too (common on Android/file picker).
-    doc = message.document
-    if not doc or not str(doc.mime_type or "").lower().startswith("image/"):
-        return
-    p = await PAYMENTS.find_one({"user_id": message.from_user.id, "status": "awaiting_utr"}, sort=[("created_at", -1)])
-    if not p:
-        return
-    try:
-        oid = ObjectId(str(p["_id"]))
-    except Exception:
-        return
-    p0 = await PAYMENTS.find_one({"_id": oid, "user_id": message.from_user.id, "status": "awaiting_utr"})
-    if not p0:
-        await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
-        return
-    if p0.get("expires_at") and p0["expires_at"] <= _now():
-        await PAYMENTS.update_one({"_id": oid, "status": "awaiting_utr"}, {"$set": {"status": "expired", "expired_at": _now()}})
-        await message.reply_text("⏰ This UPI payment request has expired. Please create a new payment.")
-        return
-    claimed = await PAYMENTS.find_one_and_update(
-        {"_id": oid, "user_id": message.from_user.id, "status": "awaiting_utr"},
-        {"$set": {"status": "pending_review", "proof_type": "screenshot", "screenshot_file_id": str(doc.file_id), "screenshot_media_type": "document", "screenshot_submitted_at": _now(), "proof_submitted_at": _now()}},
-        return_document=ReturnDocument.AFTER,
-    )
-    if not claimed:
-        await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
-        return
-    await message.reply_text(f"✅ <b>Payment screenshot received.</b>\n\n🧾 Order: <code>{claimed['order_id']}</code>\n💰 Amount: ₹{claimed['amount_inr']:.2f}\n\n⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode="HTML")
-    await _send_upi_review(client, claimed, "Screenshot", screenshot_file_id=doc.file_id, screenshot_media_type="document")
 
 @Client.on_message(filters.private & filters.photo)
 async def premium_payment_screenshot_handler(client, message):
     # A screenshot can be submitted instead of a UTR. The latest awaiting UPI
     # payment for this user is atomically claimed so duplicate screenshots do
     # not create multiple review records.
-    p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_utr"},sort=[("created_at",-1)])
+    p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_screenshot"},sort=[("created_at",-1)])
     if not p:
         return
     await submit_screenshot(client, message, str(p["_id"]))
@@ -774,23 +775,23 @@ async def premium_payment_screenshot_document_handler(client, message):
     document = message.document
     if not document or not str(document.mime_type or "").lower().startswith("image/"):
         return
-    p = await PAYMENTS.find_one({"user_id": message.from_user.id, "status": "awaiting_utr"}, sort=[("created_at", -1)])
+    p = await PAYMENTS.find_one({"user_id": message.from_user.id, "status": "awaiting_screenshot"}, sort=[("created_at", -1)])
     if not p:
         return
     try:
         oid = ObjectId(str(p["_id"]))
     except Exception:
         return
-    p0 = await PAYMENTS.find_one({"_id": oid, "user_id": message.from_user.id, "status": "awaiting_utr"})
+    p0 = await PAYMENTS.find_one({"_id": oid, "user_id": message.from_user.id, "status": "awaiting_screenshot"})
     if not p0:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
     if p0.get("expires_at") and p0["expires_at"] <= _now():
-        await PAYMENTS.update_one({"_id": oid, "status": "awaiting_utr"}, {"$set": {"status": "expired", "expired_at": _now()}})
+        await PAYMENTS.update_one({"_id": oid, "status": "awaiting_screenshot"}, {"$set": {"status": "expired", "expired_at": _now()}})
         await message.reply_text("⏰ This UPI payment request has expired. Please create a new payment.")
         return
     claimed = await PAYMENTS.find_one_and_update(
-        {"_id": oid, "user_id": message.from_user.id, "status": "awaiting_utr"},
+        {"_id": oid, "user_id": message.from_user.id, "status": "awaiting_screenshot"},
         {"$set": {
             "status": "pending_review",
             "proof_type": "screenshot",

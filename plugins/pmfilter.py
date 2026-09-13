@@ -949,7 +949,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
 
     # --- Premium payment system ---
     if query.data == "payplans":
-        await query.message.edit_text("💎 <b>PREMIUM PLANS</b>\n━━━━━━━━━━━━━━━━━━\n\nSelect a plan to continue:", reply_markup=plan_keyboard(), parse_mode=enums.ParseMode.HTML)
+        await query.message.edit_text("💎 <b>PREMIUM PLANS</b>\n━━━━━━━━━━━━━━━━━━\n\nSelect a plan to continue:", reply_markup=await plan_keyboard(), parse_mode=enums.ParseMode.HTML)
         return await query.answer()
 
     if query.data.startswith("payplan_"):
@@ -982,7 +982,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     if query.data.startswith("upisubmit_"):
         from .payment_system import PAYMENTS
         from bson import ObjectId
-        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_utr"})
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_proof"})
         except Exception: p=None
         if not p:
             return await query.answer("Payment request expired or already submitted.", show_alert=True)
@@ -997,18 +997,34 @@ async def cb_handler(client: Client, query: CallbackQuery):
     if query.data.startswith("upisendutr_"):
         from .payment_system import PAYMENTS
         from bson import ObjectId
-        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_utr"})
+        from pymongo import ReturnDocument
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_proof"})
         except Exception: p=None
-        if not p: return await query.answer("Payment request expired or already submitted.", show_alert=True)
+        if not p: return await query.answer("Payment request expired or already selected.", show_alert=True)
+        updated = await PAYMENTS.find_one_and_update(
+            {"_id": p["_id"], "user_id": query.from_user.id, "status": "awaiting_proof"},
+            {"$set": {"status": "awaiting_utr", "proof_mode": "utr", "proof_mode_selected_at": datetime.now(pytz.UTC)}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not updated:
+            return await query.answer("Payment request expired or already selected.", show_alert=True)
         await query.message.edit_text("🔢 <b>SEND UTR / REFERENCE</b>\n\nAb apne UPI app ka UTR / transaction reference number yahan message mein bhejo.\n\n⚠️ Sirf UTR bhejna hai — OTP, UPI PIN ya password kabhi nahi.",parse_mode=enums.ParseMode.HTML)
         return await query.answer()
 
     if query.data.startswith("upishot_"):
         from .payment_system import PAYMENTS
         from bson import ObjectId
-        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_utr"})
+        from pymongo import ReturnDocument
+        try: p=await PAYMENTS.find_one({"_id":ObjectId(query.data.split("_",1)[1]),"user_id":query.from_user.id,"status":"awaiting_proof"})
         except Exception: p=None
-        if not p: return await query.answer("Payment request expired or already submitted.", show_alert=True)
+        if not p: return await query.answer("Payment request expired or already selected.", show_alert=True)
+        updated = await PAYMENTS.find_one_and_update(
+            {"_id": p["_id"], "user_id": query.from_user.id, "status": "awaiting_proof"},
+            {"$set": {"status": "awaiting_screenshot", "proof_mode": "screenshot", "proof_mode_selected_at": datetime.now(pytz.UTC)}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not updated:
+            return await query.answer("Payment request expired or already selected.", show_alert=True)
         await query.message.edit_text("📸 <b>SEND PAYMENT SCREENSHOT</b>\n\nAb apne kisi bhi UPI app/platform se kiye payment ka clear screenshot yahan bhejo.\n\nScreenshot mein <b>Payment Success, exact amount aur transaction/reference details</b> visible honi chahiye.\n\n⚠️ OTP, UPI PIN ya banking password screenshot mein visible ho to crop karke bhejo.",parse_mode=enums.ParseMode.HTML)
         return await query.answer()
 
@@ -1980,7 +1996,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
         await query.answer(MSG_ALRT)
 
     elif query.data == "purchase":
-        await query.message.edit_text("💎 <b>PREMIUM PLANS</b>\n━━━━━━━━━━━━━━━━━━\n\nSelect a plan to continue:", reply_markup=plan_keyboard(), parse_mode=enums.ParseMode.HTML)
+        await query.message.edit_text("💎 <b>PREMIUM PLANS</b>\n━━━━━━━━━━━━━━━━━━\n\nSelect a plan to continue:", reply_markup=await plan_keyboard(), parse_mode=enums.ParseMode.HTML)
         return
 
     elif query.data == "donation":
@@ -2100,7 +2116,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
             "🪙 Crypto → Automatic blockchain verification\n"
             "⭐ Telegram Stars → Native Telegram payment + automatic activation"
         )
-        await query.message.edit_text(text, reply_markup=plan_keyboard(), parse_mode=enums.ParseMode.HTML)
+        await query.message.edit_text(text, reply_markup=await plan_keyboard(), parse_mode=enums.ParseMode.HTML)
         return await query.answer()
 
     elif query.data == "premium_info_legacy_disabled":

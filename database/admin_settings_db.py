@@ -39,6 +39,13 @@ DEFAULTS = {
     "referral_redeem_days": 10,
     "referral_qualification": "first_successful_search",
     "index_skip_default": 2,
+    "premium_plans": {
+        "bronze": {"enabled": True, "days": 7, "price": 10},
+        "silver": {"enabled": True, "days": 15, "price": 20},
+        "gold": {"enabled": True, "days": 30, "price": 40},
+        "platinum": {"enabled": True, "days": 45, "price": 55},
+        "diamond": {"enabled": True, "days": 60, "price": 75},
+    },
 }
 
 async def ensure_settings():
