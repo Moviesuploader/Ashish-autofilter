@@ -7,7 +7,8 @@ import aiohttp
 import qrcode
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
-from pymongo import ReturnDocument, ASCENDING, DuplicateKeyError
+from pymongo import ReturnDocument, ASCENDING
+from pymongo.errors import DuplicateKeyError
 from bson import ObjectId
 
 from info import ADMINS, OWNER_UPI_ID, QR_CODE, PREMIUM_LOGS
