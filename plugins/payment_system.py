@@ -697,20 +697,33 @@ async def start_crypto_order(client, query, plan_key, network_key):
     await query.message.edit_text(text,reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh Payment",callback_data=f"cryptorefresh_{ref}")],[InlineKeyboardButton("⬅️ Change Network",callback_data=f"paycrypto_{plan_key}")],[InlineKeyboardButton("❌ Cancel",callback_data="payplans")]]))
 
 async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screenshot_file_id=None, screenshot_media_type="photo"):
+    """Deliver a UPI review to every configured destination and report success.
+
+    The previous implementation swallowed all Telegram send errors and then
+    recorded ``review_posted`` even when nobody received the review.  That made
+    the user see a successful proof submission while the admin and Payment Logs
+    remained empty.  A review is now considered delivered when at least one
+    configured admin or the Payment Logs channel actually accepts it.
+    """
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{p['_id']}")],
         [InlineKeyboardButton("❌ CANCEL • MOVE TO PAYMENT LOGS", callback_data=f"paycancel_{p['_id']}")],
     ])
     proof_line = f"🔢 UTR: <code>{proof_value}</code>" if proof_value else "📸 Proof: <b>Payment screenshot attached</b>"
+    plan = await get_plan(p['plan']) or {}
     admin_text = (f"🔔 <b>NEW UPI PAYMENT REVIEW</b>\n━━━━━━━━━━━━━━━━━━\n\n"
                   f"👤 User ID: <code>{p['user_id']}</code>\n"
-                  f"💎 Plan: <b>{(await get_plan(p['plan']))['name']}</b>\n"
+                  f"💎 Plan: <b>{plan.get('name', p['plan'])}</b>\n"
                   f"⏰ Days: {p['days']}\n"
                   f"💰 Amount: ₹{p['amount_inr']:.2f}\n"
                   f"🧾 Order: <code>{p['order_id']}</code>\n"
                   f"{proof_line}\n\n"
                   f"⚠️ Verify the payment in your UPI/bank app before approving.\n"
                   f"If you accidentally press Cancel, the payment is moved to Payment Logs with the approval option preserved.")
+
+    delivered = []
+    failures = []
+
     for admin in ADMINS:
         try:
             if screenshot_file_id:
@@ -720,8 +733,11 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
                     await client.send_photo(int(admin), screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
             else:
                 await client.send_message(int(admin), admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            pass
+            delivered.append(f"admin:{admin}")
+        except Exception as exc:
+            failures.append(f"admin:{admin}:{type(exc).__name__}")
+            logger.exception("UPI review delivery failed for admin %s", admin)
+
     payment_logs = await _payment_logs_chat_id()
     if payment_logs:
         try:
@@ -732,9 +748,22 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
                     await client.send_photo(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
             else:
                 await client.send_message(payment_logs, admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
-        except Exception:
-            pass
-    await _record_payment_history(p, "review_posted", details={"proof_type": proof_type})
+            delivered.append(f"logs:{payment_logs}")
+        except Exception as exc:
+            failures.append(f"logs:{payment_logs}:{type(exc).__name__}")
+            logger.exception("UPI review delivery failed for Payment Logs %s", payment_logs)
+
+    ok = bool(delivered)
+    await _record_payment_history(
+        p,
+        "review_posted" if ok else "review_delivery_failed",
+        details={
+            "proof_type": proof_type,
+            "delivered_to": delivered,
+            "failed_destinations": failures,
+        },
+    )
+    return ok
 
 async def submit_utr(client, message, ref):
     utr=message.text.strip().replace(" ","")
@@ -762,9 +791,23 @@ async def submit_utr(client, message, ref):
     if not p:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
-    await _record_payment_history(p, "proof_submitted", details={"proof_type": "utr", "utr": utr})
-    await message.reply_text(f"✅ <b>UTR submitted.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your payment proof is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode=enums.ParseMode.HTML)
-    await _send_upi_review(client, p, "UTR", utr)
+    delivered = await _send_upi_review(client, p, "UTR", utr)
+    await _record_payment_history(p, "proof_submitted", details={"proof_type": "utr", "utr": utr, "review_delivered": delivered})
+    if delivered:
+        await message.reply_text(
+            f"✅ <b>Payment request sent to admin.</b>\n\n"
+            f"🧾 Order: <code>{p['order_id']}</code>\n"
+            f"💰 Amount: ₹{p['amount_inr']:.2f}\n\n"
+            "⏳ Admin will check your payment. Premium will activate only after approval.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+    else:
+        await message.reply_text(
+            f"⚠️ <b>UTR saved, but admin notification could not be delivered.</b>\n\n"
+            f"🧾 Order: <code>{p['order_id']}</code>\n"
+            "Please contact admin and share this Order ID. Do not submit your UPI PIN/OTP.",
+            parse_mode=enums.ParseMode.HTML,
+        )
 
 async def submit_screenshot(client, message, ref):
     photo = message.photo
@@ -787,9 +830,23 @@ async def submit_screenshot(client, message, ref):
     if not p:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
-    await _record_payment_history(p, "proof_submitted", details={"proof_type": "screenshot", "media_type": "photo"})
-    await message.reply_text(f"✅ <b>Payment screenshot received.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode=enums.ParseMode.HTML)
-    await _send_upi_review(client, p, "Screenshot", screenshot_file_id=photo.file_id, screenshot_media_type="photo")
+    delivered = await _send_upi_review(client, p, "Screenshot", screenshot_file_id=photo.file_id, screenshot_media_type="photo")
+    await _record_payment_history(p, "proof_submitted", details={"proof_type": "screenshot", "media_type": "photo", "review_delivered": delivered})
+    if delivered:
+        await message.reply_text(
+            f"✅ <b>Payment request sent to admin.</b>\n\n"
+            f"🧾 Order: <code>{p['order_id']}</code>\n"
+            f"💰 Amount: ₹{p['amount_inr']:.2f}\n\n"
+            "⏳ Admin will check your payment. Premium will activate only after approval.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+    else:
+        await message.reply_text(
+            f"⚠️ <b>Screenshot saved, but admin notification could not be delivered.</b>\n\n"
+            f"🧾 Order: <code>{p['order_id']}</code>\n"
+            "Please contact admin and share this Order ID. Do not submit your UPI PIN/OTP.",
+            parse_mode=enums.ParseMode.HTML,
+        )
 
 async def _copy_payment_to_logs(client, p, note="🗂 MOVED TO PAYMENT LOGS"):
     payment_logs = await _payment_logs_chat_id()
@@ -942,16 +999,24 @@ async def premium_payment_screenshot_document_handler(client, message):
     if not claimed:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
-    await message.reply_text(
-        f"✅ <b>Payment screenshot received.</b>\n\n"
-        f"🧾 Order: <code>{claimed['order_id']}</code>\n"
-        f"💰 Amount: ₹{claimed['amount_inr']:.2f}\n\n"
-        f"⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.",
-        parse_mode=enums.ParseMode.HTML,
-    )
-    await _record_payment_history(claimed, "proof_submitted", details={"proof_type": "screenshot", "media_type": "document"})
-    await _send_upi_review(
+    delivered = await _send_upi_review(
         client, claimed, "Screenshot",
         screenshot_file_id=document.file_id,
         screenshot_media_type="document",
     )
+    await _record_payment_history(claimed, "proof_submitted", details={"proof_type": "screenshot", "media_type": "document", "review_delivered": delivered})
+    if delivered:
+        await message.reply_text(
+            f"✅ <b>Payment request sent to admin.</b>\n\n"
+            f"🧾 Order: <code>{claimed['order_id']}</code>\n"
+            f"💰 Amount: ₹{claimed['amount_inr']:.2f}\n\n"
+            "⏳ Admin will check your payment. Premium will activate only after approval.",
+            parse_mode=enums.ParseMode.HTML,
+        )
+    else:
+        await message.reply_text(
+            f"⚠️ <b>Screenshot saved, but admin notification could not be delivered.</b>\n\n"
+            f"🧾 Order: <code>{claimed['order_id']}</code>\n"
+            "Please contact admin and share this Order ID. Do not submit your UPI PIN/OTP.",
+            parse_mode=enums.ParseMode.HTML,
+        )
