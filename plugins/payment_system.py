@@ -606,28 +606,72 @@ async def start_upi(client, query, plan_key):
     p=await get_plan(plan_key)
     if not p or not p.get("enabled", True):
         return await query.answer("This Premium plan is currently disabled by admin.", show_alert=True)
-    order=f"UPI-{query.from_user.id}-{uuid.uuid4().hex[:10].upper()}"
-    doc={"order_id":order,"user_id":query.from_user.id,"plan":plan_key,"days":p["days"],"amount_inr":float(p["price"]),"payment_type":"upi","status":"awaiting_proof","created_at":_now(),"expires_at":_now()+timedelta(minutes=int(os.getenv("UPI_PAYMENT_EXPIRY_MINUTES","60")))}
-    res=await PAYMENTS.insert_one(doc); ref=str(res.inserted_id)
-    uri=_upi_uri(p["price"],order)
-    text=(f"💳 <b>UPI PAYMENT</b>\n━━━━━━━━━━━━━━━━━━\n\n{p['name']} • {p['days']} Days\n💰 Exact Amount: <b>₹{p['price']:.2f}</b>\n\n📌 UPI ID: <code>{OWNER_UPI_ID}</code>\n🧾 Order ID: <code>{order}</code>\n\n1️⃣ Pay the exact amount.\n2️⃣ Tap <b>I've Paid</b>.\n3️⃣ Submit either your <b>UTR / transaction reference</b> OR a <b>payment screenshot</b>.\n4️⃣ Admin will verify the proof manually. <b>Premium activates only after approval.</b>\n\n⚠️ Screenshot must clearly show the payment status, amount and transaction/reference details.\n⚠️ Do not send OTP, UPI PIN or banking password.")
-    # Telegram Bot API inline URL buttons accept HTTP/tg:// URLs, not the
-    # custom upi:// scheme. Sending a upi:// URL button can make the whole
-    # send_photo request fail, which looked like a dead UPI button. Keep the
-    # UPI intent inside the QR and expose the UPI ID through a callback.
-    kb=InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Show / Copy UPI ID", callback_data=f"upi_copy_{ref}")],
-        [InlineKeyboardButton("✅ I've Paid • Submit Proof",callback_data=f"upisubmit_{ref}")],
-        [InlineKeyboardButton("❌ Cancel",callback_data="payplans")],
-    ])
+    if not OWNER_UPI_ID or "@" not in OWNER_UPI_ID:
+        logger.error("UPI checkout blocked: OWNER_UPI_ID is missing/invalid")
+        return await query.answer("UPI is not configured correctly. Please contact admin.", show_alert=True)
+
     try:
-        await query.message.delete()
+        order=f"UPI-{query.from_user.id}-{uuid.uuid4().hex[:10].upper()}"
+        doc={"order_id":order,"user_id":query.from_user.id,"plan":plan_key,"days":p["days"],"amount_inr":float(p["price"]),"payment_type":"upi","status":"awaiting_proof","created_at":_now(),"expires_at":_now()+timedelta(minutes=int(os.getenv("UPI_PAYMENT_EXPIRY_MINUTES","60")))}
+        res=await PAYMENTS.insert_one(doc); ref=str(res.inserted_id)
+        uri=_upi_uri(p["price"],order)
+        text=(f"💳 <b>UPI PAYMENT</b>\n━━━━━━━━━━━━━━━━━━\n\n{p['name']} • {p['days']} Days\n💰 Exact Amount: <b>₹{p['price']:.2f}</b>\n\n📌 UPI ID: <code>{OWNER_UPI_ID}</code>\n🧾 Order ID: <code>{order}</code>\n\n1️⃣ Pay the exact amount.\n2️⃣ Tap <b>I've Paid</b>.\n3️⃣ Submit either your <b>UTR / transaction reference</b> OR a <b>payment screenshot</b>.\n4️⃣ Admin will verify the proof manually. <b>Premium activates only after approval.</b>\n\n⚠️ Screenshot must clearly show the payment status, amount and transaction/reference details.\n⚠️ Do not send OTP, UPI PIN or banking password.")
+        # Telegram Bot API inline URL buttons do not reliably support the custom
+        # upi:// scheme. Keep the UPI intent inside the QR and expose the VPA
+        # through a callback instead.
+        kb=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📋 Show / Copy UPI ID", callback_data=f"upi_copy_{ref}")],
+            [InlineKeyboardButton("✅ I've Paid • Submit Proof",callback_data=f"upisubmit_{ref}")],
+            [InlineKeyboardButton("❌ Cancel",callback_data="payplans")],
+        ])
+
+        # First replace the callback message with a guaranteed text checkout.
+        # This is intentionally done before generating/sending the QR so a QR
+        # failure can never make the UPI button look dead or leave a blank UI.
+        try:
+            await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            # Some older/media messages cannot be edited as text; send the
+            # guaranteed text checkout instead.
+            try:
+                await client.send_message(query.from_user.id, text, reply_markup=kb, parse_mode="HTML")
+            except Exception as send_exc:
+                logger.exception("UPI text checkout send failed")
+                return await query.answer(f"UPI checkout could not open: {str(send_exc)[:120]}", show_alert=True)
+
+        # QR is an enhancement, never a dependency.  If Telegram rejects the
+        # generated photo, the already-visible text checkout remains usable.
+        if uri:
+            try:
+                await client.send_photo(query.from_user.id, photo=_qr_bytes(uri), caption="📱 <b>Scan this UPI QR</b> to pay the exact amount.", parse_mode="HTML")
+            except Exception:
+                logger.exception("UPI QR send failed; text checkout remains available")
+
+        try:
+            await query.answer("💳 UPI checkout opened")
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.exception("UPI checkout failed for plan %s", plan_key)
+        return await query.answer("UPI checkout failed. Please try again.", show_alert=True)
+
+@Client.on_callback_query(filters.regex(r"^payupi_"))
+async def direct_upi_callback(client, query):
+    """Dedicated UPI callback so the payment button is handled before the
+    generic PM callback router. This keeps UPI checkout responsive even when
+    other callback handlers are added to the bot."""
+    plan_key = query.data.split("_", 1)[1].strip()
+    if not plan_key:
+        return await query.answer("Invalid UPI plan.", show_alert=True)
+    try:
+        await start_upi(client, query, plan_key)
     except Exception:
-        pass
-    if uri:
-        await client.send_photo(query.from_user.id, photo=_qr_bytes(uri), caption=text, reply_markup=kb, parse_mode="HTML")
-    else:
-        await client.send_message(query.from_user.id, text, reply_markup=kb, parse_mode="HTML")
+        logger.exception("Dedicated UPI callback failed for plan %s", plan_key)
+        try:
+            await query.answer("UPI checkout failed. Please try again.", show_alert=True)
+        except Exception:
+            pass
+
 
 async def start_crypto(client, query, plan_key):
     if not await get_setting("payment_crypto_enabled", True):

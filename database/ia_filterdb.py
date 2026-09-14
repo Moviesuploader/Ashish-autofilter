@@ -151,6 +151,64 @@ async def get_search_results(chat_id, query, file_type=None, max_results=10, off
 
     total_results = ((await Media.count_documents(filter))+(await Media2.count_documents(filter)))
 
+    # Robust catalogue fallback: users should be able to type the movie name
+    # naturally. Indexed filenames often contain release tags, Unicode
+    # punctuation, language/quality labels and season/episode markers.
+    # When the legacy phrase regex misses, search significant title tokens as
+    # plain substrings (case-insensitive) across both indexed collections.
+    if total_results == 0 and query:
+        normalized = re.sub(r"[._+\-\[\]{}()/:|]+", " ", query, flags=re.IGNORECASE)
+        normalized = re.sub(r"\b(?:s|season)\s*0*(\d{1,2})\b", r"season \1", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\b(?:e|ep|episode)\s*0*(\d{1,3})\b", r"episode \1", normalized, flags=re.IGNORECASE)
+        stop = {
+            "movie", "movies", "series", "full", "file", "download",
+            "watch", "in", "with", "and", "please", "send", "link",
+            "find", "give", "get", "season", "episode",
+        }
+        tokens = [
+            t for t in re.findall(r"[\w]+", normalized.lower(), flags=re.UNICODE)
+            if len(t) > 1 and t not in stop
+        ]
+        if tokens:
+            # First require every meaningful title token. This handles natural
+            # queries while avoiding matches based only on generic words.
+            token_clauses = []
+            for token in tokens[:12]:
+                token_re = re.compile(re.escape(token), flags=re.IGNORECASE)
+                fields = [{"file_name": token_re}]
+                if USE_CAPTION_FILTER:
+                    fields.append({"caption": token_re})
+                token_clauses.append({"$or": fields})
+            fallback_filter = {"$and": token_clauses}
+            if file_type:
+                fallback_filter["file_type"] = file_type
+            total_results = (
+                await Media.count_documents(fallback_filter)
+                + await Media2.count_documents(fallback_filter)
+            )
+            if total_results:
+                filter = fallback_filter
+            else:
+                # Catalogue-only last resort: use the strongest title token.
+                # This is deliberately still restricted to indexed files and is
+                # what prevents an already-indexed movie from becoming a false
+                # "not found" merely because the release filename differs.
+                strongest = max(tokens[:12], key=len)
+                strong_re = re.compile(re.escape(strongest), flags=re.IGNORECASE)
+                strong_fields = [{"file_name": strong_re}]
+                if USE_CAPTION_FILTER:
+                    strong_fields.append({"caption": strong_re})
+                strong_filter = {"$or": strong_fields}
+                if file_type:
+                    strong_filter["file_type"] = file_type
+                strong_total = (
+                    await Media.count_documents(strong_filter)
+                    + await Media2.count_documents(strong_filter)
+                )
+                if strong_total:
+                    filter = strong_filter
+                    total_results = strong_total
+
     #verifies max_results is an even number or not
     if max_results%2 != 0: 
         logger.info(f"Since max_results is an odd number ({max_results}), bot will use {max_results+1} as max_results to make it even.")

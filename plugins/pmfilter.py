@@ -92,16 +92,13 @@ async def give_filter(client, message):
     if message.chat.id != SUPPORT_CHAT_ID:
         manual = await manual_filters(client, message)
         if manual == False:
-            settings = await get_settings(message.chat.id)
+            # Users should be able to type a movie/series name directly in the
+            # group. Indexed catalogue search is the normal search path; it is
+            # not gated behind the legacy auto_ffilter setting.
             try:
-                if settings['auto_ffilter']:
-                    await auto_filter(client, message)
-            except KeyError:
-                grpid = await active_connection(str(message.from_user.id))
-                await save_group_settings(grpid, 'auto_ffilter', True)
-                settings = await get_settings(message.chat.id)
-                if settings['auto_ffilter']:
-                    await auto_filter(client, message) 
+                await auto_filter(client, message)
+            except Exception:
+                logger.exception("Group movie search failed for %s", message.chat.id)
     else:
         search = message.text
         temp_files, temp_offset, total_results = await get_search_results(chat_id=message.chat.id, query=search.lower(), offset=0, filter=True)
@@ -135,27 +132,15 @@ async def pm_text(bot, message):
         return  
     try:
         await mdb.update_top_messages(user_id, content)
-        # Admin Panel is the single runtime source of truth for PM search.
-        # The legacy per-bot PM_SEARCH value must not silently disable the
-        # current Search Movies flow.
-        pm_search = await get_setting("pm_search_enabled", True)
-        if pm_search:
-            try:
-                await auto_filter(bot, message)
-            except Exception:
-                logger.exception("PM movie search failed for user %s", user_id)
-                await message.reply_text(
-                    "⚠️ <b>Search service temporarily failed.</b> Please try the movie name again in a few seconds.",
-                    parse_mode=enums.ParseMode.HTML,
-                )
-        else:
+        # Direct PM movie-name search is always enabled. Users only need to
+        # type the movie/series name; /search is not required.
+        try:
+            await auto_filter(bot, message)
+        except Exception:
+            logger.exception("PM movie search failed for user %s", user_id)
             await message.reply_text(
-             text=f"<b>🙋 ʜᴇʏ {user} 😍 ,\n\n𝒀𝒐𝒖 𝒄𝒂𝒏 𝒔𝒆𝒂𝒓𝒄𝒉 𝒇𝒐𝒓 𝒎𝒐𝒗𝒊𝒆𝒔 𝒐𝒏𝒍𝒚 𝒐𝒏 𝒐𝒖𝒓 𝑴𝒐𝒗𝒊𝒆 𝑮𝒓𝒐𝒖𝒑. 𝒀𝒐𝒖 𝒂𝒓𝒆 𝒏𝒐𝒕 𝒂𝒍𝒍𝒐𝒘𝒆𝒅 𝒕𝒐 𝒔𝒆𝒂𝒓𝒄𝒉 𝒇𝒐𝒓 𝒎𝒐𝒗𝒊𝒆𝒔 𝒐𝒏 𝑫𝒊𝒓𝒆𝒄𝒕 𝑩𝒐𝒕. 𝑷𝒍𝒆𝒂𝒔𝒆 𝒋𝒐𝒊𝒏 𝒐𝒖𝒓 𝒎𝒐𝒗𝒊𝒆 𝒈𝒓𝒐𝒖𝒑 𝒃𝒚 𝒄𝒍𝒊𝒄𝒌𝒊𝒏𝒈 𝒐𝒏 𝒕𝒉𝒆  𝑹𝑬𝑸𝑼𝑬𝑺𝑻 𝑯𝑬𝑹𝑬 𝒃𝒖𝒕𝒕𝒐𝒏 𝒈𝒊𝒗𝒆𝒏 𝒃𝒆𝒍𝒐𝒘 𝒂𝒏𝒅 𝒔𝒆𝒂𝒓𝒄𝒉 𝒚𝒐𝒖𝒓 𝒇𝒂𝒗𝒐𝒓𝒊𝒕𝒆 𝒎𝒐𝒗𝒊𝒆 𝒕𝒉𝒆𝒓𝒆 👇\n\n<blockquote>आप केवल हमारे 𝑴𝒐𝒗𝒊𝒆 𝑮𝒓𝒐𝒖𝒑 पर ही 𝑴𝒐𝒗𝒊𝒆 𝑺𝒆𝒂𝒓𝒄𝒉 कर सकते हो । आपको 𝑫𝒊𝒓𝒆𝒄𝒕 𝑩𝒐𝒕 पर 𝑴𝒐𝒗𝒊𝒆 𝑺𝒆𝒂𝒓𝒄𝒉 करने की 𝑷𝒆𝒓𝒎𝒊𝒔𝒔𝒊𝒐𝒏 नहीं है कृपया नीचे दिए गए 𝑹𝑬𝑸𝑼𝑬𝑺𝑻 𝑯𝑬𝑹𝑬 वाले 𝑩𝒖𝒕𝒕𝒐𝒏 पर क्लिक करके हमारे 𝑴𝒐𝒗𝒊𝒆 𝑮𝒓𝒐𝒖𝒑 को 𝑱𝒐𝒊𝒏 करें और वहां पर अपनी मनपसंद 𝑴𝒐𝒗𝒊𝒆 𝑺𝒆𝒂𝒓𝒄𝒉 सर्च करें ।</blockquote></b>",   
-             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📝 ʀᴇǫᴜᴇsᴛ ʜᴇʀᴇ ", url=f"https://t.me/beautyofthemoviesdiscussion")]])
-            )
-            await bot.send_message(
-                chat_id=LOG_CHANNEL,
-                text=f"<b>#𝐏𝐌_𝐌𝐒𝐆\n\n👤 Nᴀᴍᴇ : {user}\n<b>🆔 ID : {user_id}\n💬 Mᴇssᴀɢᴇ : {content}</blockquote></b>"
+                "⚠️ <b>Search service temporarily failed.</b> Please try the movie name again in a few seconds.",
+                parse_mode=enums.ParseMode.HTML,
             )
     except Exception as e:
         # Log the error
@@ -979,8 +964,17 @@ async def cb_handler(client: Client, query: CallbackQuery):
         return await query.answer()
 
     if query.data.startswith("payupi_"):
-        await start_upi(client, query, query.data.split("_", 1)[1])
-        return await query.answer()
+        # Handle UPI as a terminal callback.  start_upi owns the callback answer
+        # so Telegram never receives a second answer for the same query.
+        try:
+            return await start_upi(client, query, query.data.split("_", 1)[1])
+        except Exception:
+            logger.exception("UPI payment callback failed")
+            try:
+                await query.answer("UPI checkout failed. Please try again.", show_alert=True)
+            except Exception:
+                pass
+            return
 
     if query.data.startswith("paycrypto_"):
         await start_crypto(client, query, query.data.split("_", 1)[1])

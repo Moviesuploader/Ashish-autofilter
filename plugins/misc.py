@@ -2,6 +2,7 @@ import os
 from pyrogram import Client, filters, enums
 from pyrogram.errors.exceptions.bad_request_400 import UserNotParticipant, MediaEmpty, PhotoInvalidDimensions, WebpageMediaEmpty
 from utils import extract_user, get_file_id, get_poster
+from database.ia_filterdb import get_search_results
 from datetime import datetime
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import logging
@@ -128,8 +129,27 @@ async def who_is(client, message):
 @Client.on_message(filters.command(["imdb", 'search']))
 async def imdb_search(client, message):
     if ' ' in message.text:
-        k = await message.reply('Searching ImDB')
-        r, title = message.text.split(None, 1)
+        _, title = message.text.split(None, 1)
+        title = " ".join(title.split()).strip()
+
+        # /search should search the bot's indexed catalogue first.
+        # IMDb is only a fallback for titles that are not indexed.
+        try:
+            _, _, total_results = await get_search_results(
+                chat_id=message.chat.id, query=title.lower(), offset=0, filter=True
+            )
+        except Exception:
+            logger.exception("Catalogue search failed for /search %r", title)
+            total_results = 0
+
+        if total_results > 0:
+            # The catalogue is authoritative for files already indexed in the bot.
+            # Reuse the normal search UI instead of sending the user to IMDb.
+            from .pmfilter import auto_filter
+            message.text = title
+            return await auto_filter(client, message)
+
+        k = await message.reply('🔎 Searching IMDb…')
         movies = await get_poster(title, bulk=True)
         if not movies:
             return await message.reply("No results Found")
