@@ -1,4 +1,4 @@
-import os, io, uuid, asyncio
+import os, io, uuid, asyncio, logging
 from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -16,7 +16,10 @@ from database.config_db import mdb
 from database.admin_settings_db import get_setting
 from database.users_chats_db import db
 
+logger = logging.getLogger(__name__)
+
 PAYMENTS = mdb.db["premium_payments"]
+PAYMENT_HISTORY = mdb.db["payment_action_history"]
 
 PLANS = {
     "bronze": {"name": "🥉 Bronze", "days": 7, "price": Decimal("10")},
@@ -89,27 +92,83 @@ def stars_amount(price):
     return max(1, int(amount))
 
 
-async def ensure_payment_indexes():
-    """Create payment safety indexes once at startup.
-
-    tx_hash is unique when present so the same blockchain transaction cannot
-    be used to finish two different crypto orders. Order IDs and submitted
-    UTRs are also protected against accidental duplicates.
+async def _payment_logs_chat_id():
+    """Runtime Payment Logs channel configured from Admin Panel.
+    Falls back to the legacy PREMIUM_LOGS env value for backward compatibility.
     """
-    await PAYMENTS.create_index([("order_id", ASCENDING)], unique=True, name="uniq_payment_order_id")
-    await PAYMENTS.create_index(
+    try:
+        value = await get_setting("premium_logs", None)
+        return int(value) if value else (int(PREMIUM_LOGS) if PREMIUM_LOGS else None)
+    except Exception:
+        try:
+            return int(PREMIUM_LOGS) if PREMIUM_LOGS else None
+        except Exception:
+            return None
+
+
+async def _record_payment_history(payment, action, admin_id=None, details=None):
+    """Immutable audit trail for every important UPI payment state transition."""
+    try:
+        await PAYMENT_HISTORY.insert_one({
+            "payment_id": payment.get("_id"),
+            "order_id": payment.get("order_id"),
+            "user_id": payment.get("user_id"),
+            "payment_type": payment.get("payment_type"),
+            "status": payment.get("status"),
+            "action": action,
+            "admin_id": int(admin_id) if admin_id else None,
+            "details": details or {},
+            "created_at": _now(),
+        })
+    except Exception:
+        pass
+
+
+async def _ensure_one_payment_index(keys, **kwargs):
+    """Create one index without making an old/dirty payment collection fatal."""
+    name = kwargs.get("name", "unnamed")
+    try:
+        await PAYMENTS.create_index(keys, **kwargs)
+        return True
+    except DuplicateKeyError:
+        # Existing duplicate records should not take the whole Koyeb process
+        # down. The payment flow still performs atomic status claims; the admin
+        # can clean the legacy duplicates later.
+        logger.warning("Could not create unique payment index %s because duplicate data exists.", name)
+        return False
+    except Exception as e:
+        # MongoDB code 85 = IndexOptionsConflict. This can happen when an older
+        # deployment created the same named index with different options.
+        if getattr(e, "code", None) == 85:
+            try:
+                await PAYMENTS.drop_index(name)
+                await PAYMENTS.create_index(keys, **kwargs)
+                return True
+            except Exception:
+                logger.exception("Could not replace conflicting payment index %s", name)
+                return False
+        logger.exception("Could not create payment index %s", name)
+        return False
+
+
+async def ensure_payment_indexes():
+    """Create payment safety indexes without turning legacy DB issues into a deploy crash."""
+    await _ensure_one_payment_index(
+        [("order_id", ASCENDING)], unique=True, name="uniq_payment_order_id"
+    )
+    await _ensure_one_payment_index(
         [("tx_hash", ASCENDING)],
         unique=True,
         partialFilterExpression={"tx_hash": {"$type": "string", "$gt": ""}},
         name="uniq_crypto_tx_hash",
     )
-    await PAYMENTS.create_index(
+    await _ensure_one_payment_index(
         [("payment_type", ASCENDING), ("utr", ASCENDING)],
         unique=True,
         partialFilterExpression={"payment_type": "upi", "utr": {"$type": "string", "$gt": ""}},
         name="uniq_upi_utr",
     )
-    await PAYMENTS.create_index(
+    await _ensure_one_payment_index(
         [("telegram_payment_charge_id", ASCENDING)],
         unique=True,
         partialFilterExpression={"telegram_payment_charge_id": {"$type": "string", "$gt": ""}},
@@ -552,7 +611,15 @@ async def start_upi(client, query, plan_key):
     res=await PAYMENTS.insert_one(doc); ref=str(res.inserted_id)
     uri=_upi_uri(p["price"],order)
     text=(f"💳 <b>UPI PAYMENT</b>\n━━━━━━━━━━━━━━━━━━\n\n{p['name']} • {p['days']} Days\n💰 Exact Amount: <b>₹{p['price']:.2f}</b>\n\n📌 UPI ID: <code>{OWNER_UPI_ID}</code>\n🧾 Order ID: <code>{order}</code>\n\n1️⃣ Pay the exact amount.\n2️⃣ Tap <b>I've Paid</b>.\n3️⃣ Submit either your <b>UTR / transaction reference</b> OR a <b>payment screenshot</b>.\n4️⃣ Admin will verify the proof manually. <b>Premium activates only after approval.</b>\n\n⚠️ Screenshot must clearly show the payment status, amount and transaction/reference details.\n⚠️ Do not send OTP, UPI PIN or banking password.")
-    kb=InlineKeyboardMarkup([[InlineKeyboardButton("📲 Pay via UPI",url=uri)] if uri else [InlineKeyboardButton("📌 UPI ID",callback_data=f"upi_copy_{ref}")], [InlineKeyboardButton("✅ I've Paid • Submit Proof",callback_data=f"upisubmit_{ref}")],[InlineKeyboardButton("❌ Cancel",callback_data="payplans")]])
+    # Telegram Bot API inline URL buttons accept HTTP/tg:// URLs, not the
+    # custom upi:// scheme. Sending a upi:// URL button can make the whole
+    # send_photo request fail, which looked like a dead UPI button. Keep the
+    # UPI intent inside the QR and expose the UPI ID through a callback.
+    kb=InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Show / Copy UPI ID", callback_data=f"upi_copy_{ref}")],
+        [InlineKeyboardButton("✅ I've Paid • Submit Proof",callback_data=f"upisubmit_{ref}")],
+        [InlineKeyboardButton("❌ Cancel",callback_data="payplans")],
+    ])
     try:
         await query.message.delete()
     except Exception:
@@ -611,17 +678,19 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
                 await client.send_message(int(admin), admin_text, reply_markup=buttons, parse_mode="HTML")
         except Exception:
             pass
-    if PREMIUM_LOGS:
+    payment_logs = await _payment_logs_chat_id()
+    if payment_logs:
         try:
             if screenshot_file_id:
                 if screenshot_media_type == "document":
-                    await client.send_document(PREMIUM_LOGS, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
+                    await client.send_document(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
                 else:
-                    await client.send_photo(PREMIUM_LOGS, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
+                    await client.send_photo(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
             else:
-                await client.send_message(PREMIUM_LOGS, admin_text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_message(payment_logs, admin_text, reply_markup=buttons, parse_mode="HTML")
         except Exception:
             pass
+    await _record_payment_history(p, "review_posted", details={"proof_type": proof_type})
 
 async def submit_utr(client, message, ref):
     utr=message.text.strip().replace(" ","")
@@ -649,6 +718,7 @@ async def submit_utr(client, message, ref):
     if not p:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
+    await _record_payment_history(p, "proof_submitted", details={"proof_type": "utr", "utr": utr})
     await message.reply_text(f"✅ <b>UTR submitted.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your payment proof is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode="HTML")
     await _send_upi_review(client, p, "UTR", utr)
 
@@ -673,11 +743,13 @@ async def submit_screenshot(client, message, ref):
     if not p:
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
+    await _record_payment_history(p, "proof_submitted", details={"proof_type": "screenshot", "media_type": "photo"})
     await message.reply_text(f"✅ <b>Payment screenshot received.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode="HTML")
     await _send_upi_review(client, p, "Screenshot", screenshot_file_id=photo.file_id, screenshot_media_type="photo")
 
 async def _copy_payment_to_logs(client, p, note="🗂 MOVED TO PAYMENT LOGS"):
-    if not PREMIUM_LOGS:
+    payment_logs = await _payment_logs_chat_id()
+    if not payment_logs:
         return False
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{p['_id']}")],
@@ -693,11 +765,12 @@ async def _copy_payment_to_logs(client, p, note="🗂 MOVED TO PAYMENT LOGS"):
     try:
         if p.get("screenshot_file_id"):
             if p.get("screenshot_media_type") == "document":
-                await client.send_document(PREMIUM_LOGS, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_document(payment_logs, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode="HTML")
             else:
-                await client.send_photo(PREMIUM_LOGS, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_photo(payment_logs, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode="HTML")
         else:
-            await client.send_message(PREMIUM_LOGS, text, reply_markup=buttons, parse_mode="HTML")
+            await client.send_message(payment_logs, text, reply_markup=buttons, parse_mode="HTML")
+        await _record_payment_history(p, "moved_to_payment_logs", details={"note": note})
         return True
     except Exception:
         return False
@@ -713,6 +786,8 @@ async def admin_payment_action(client, query, ref, approve):
     if status not in {"pending_review","cancelled_review"}:
         return await query.answer(f"Already {status}.",show_alert=True)
     if not approve:
+        if status == "cancelled_review":
+            return await query.answer("Already in Payment Logs. Use APPROVE & ACTIVATE when verified.", show_alert=True)
         # Do not destroy the reviewable payment. Mark it as cancelled/moved and
         # create a fresh Payment Logs entry with the approval control preserved.
         changed=await PAYMENTS.find_one_and_update(
@@ -727,7 +802,24 @@ async def admin_payment_action(client, query, ref, approve):
             else:
                 await query.message.edit_text((query.message.text or "")+"\n\n🗂 <b>CANCELLED / MOVED TO PAYMENT LOGS</b>",reply_markup=None,parse_mode="HTML")
         except Exception: pass
-        await _copy_payment_to_logs(client, changed)
+        await _record_payment_history(changed, "cancelled_to_logs", admin_id=query.from_user.id)
+        moved = await _copy_payment_to_logs(client, changed)
+        if not moved:
+            # Never strand a payment if the configured logs channel is missing
+            # or temporarily unavailable. Restore the review state and keep the
+            # approval controls on the original admin message.
+            await PAYMENTS.update_one(
+                {"_id": oid, "status": "cancelled_review"},
+                {"$set": {"status": "pending_review"}, "$unset": {"cancelled_at": "", "cancelled_by": ""}},
+            )
+            try:
+                if query.message.photo:
+                    await query.message.edit_caption(query.message.caption or "", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{oid}")], [InlineKeyboardButton("❌ CANCEL", callback_data=f"paycancel_{oid}")]]), parse_mode="HTML")
+                else:
+                    await query.message.edit_text(query.message.text or "", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{oid}")], [InlineKeyboardButton("❌ CANCEL", callback_data=f"paycancel_{oid}")]]), parse_mode="HTML")
+            except Exception:
+                pass
+            return await query.answer("Payment Logs channel is unavailable. Payment remains pending review.", show_alert=True)
         try: await client.send_message(p["user_id"],f"ℹ️ Your UPI payment proof for <b>{(await get_plan(p['plan']))['name']}</b> is still under review.\n\n🧾 Order: <code>{p['order_id']}</code>",parse_mode="HTML")
         except Exception: pass
         return await query.answer("Moved to Payment Logs. Approval is still available there.")
@@ -736,8 +828,18 @@ async def admin_payment_action(client, query, ref, approve):
         {"$set":{"status":"processing","reviewed_by":query.from_user.id,"reviewed_at":_now()}},
         return_document=ReturnDocument.AFTER)
     if not claimed:return await query.answer("Could not claim payment.",show_alert=True)
-    expiry=await activate_premium(claimed["user_id"],claimed["days"])
-    await PAYMENTS.update_one({"_id":oid},{"$set":{"status":"finished","premium_expiry":expiry}})
+    try:
+        expiry=await activate_premium(claimed["user_id"],claimed["days"])
+        await PAYMENTS.update_one({"_id":oid,"status":"processing"},{"$set":{"status":"finished","premium_expiry":expiry}})
+    except Exception:
+        logger.exception("Premium activation failed for payment %s", claimed.get("order_id"))
+        await PAYMENTS.update_one(
+            {"_id":oid,"status":"processing"},
+            {"$set":{"status":"pending_review","activation_error_at":_now()}},
+        )
+        return await query.answer("Premium activation failed. Payment returned to pending review.", show_alert=True)
+    approved_payment = await PAYMENTS.find_one({"_id": oid}) or claimed
+    await _record_payment_history(approved_payment, "approved_and_activated", admin_id=query.from_user.id, details={"premium_expiry": expiry})
     try:
         if query.message.photo:
             await query.message.edit_caption((query.message.caption or "")+f"\n\n✅ <b>APPROVED & PREMIUM ACTIVATED</b>\n⏳ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>",reply_markup=None,parse_mode="HTML")
@@ -812,6 +914,7 @@ async def premium_payment_screenshot_document_handler(client, message):
         f"⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.",
         parse_mode="HTML",
     )
+    await _record_payment_history(claimed, "proof_submitted", details={"proof_type": "screenshot", "media_type": "document"})
     await _send_upi_review(
         client, claimed, "Screenshot",
         screenshot_file_id=document.file_id,

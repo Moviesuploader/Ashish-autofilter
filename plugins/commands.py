@@ -22,7 +22,7 @@ from database.ia_filterdb import Media, Media2, get_file_details, unpack_new_fil
 from database.users_chats_db import db, delete_all_msg
 from info import CHANNELS, FSUB_PICS, ADMINS, LOG_CHANNEL, PICS, BATCH_FILE_CAPTION, CUSTOM_FILE_CAPTION, PROTECT_CONTENT, CHNL_LNK, REQST_CHANNEL, GRP_LNK, SUPPORT_CHAT_ID, MAX_B_TN, VERIFY, REACTIONS, HOW_TO_VERIFY, PICS, DEENDAYAL_VERIFIED_LOG, SUBSCRIPTION, DEENDAYAL_VERIFY_EXPIRE, DEENDAYAL_MOVIE_UPDATE_CHANNEL_LNK, STREAM_MODE, EMOJI_MODE, OWNER_LNK, OWNER_UPI_ID, QR_CODE, DELETE_TIME
 from utils import get_settings, get_size, is_subscribed, save_group_settings, temp, verify_user, check_token, check_verification, get_token, get_shortlink, get_tutorial, get_time, VERIFY_ORIGIN
-from .ui_theme import home_caption, home_keyboard, reply_keyboard
+from .ui_theme import home_caption, home_keyboard, reply_keyboard, mark_reply_keyboard_open, mark_reply_keyboard_closed
 from database.connections_mdb import active_connection
 from .request_system import handle_user_request_text, handle_admin_reply_text, handle_request_callback, request_prompt
 from .payment_system import plan_keyboard
@@ -79,15 +79,20 @@ async def _delete_later(message, delay):
 )
 async def pm_quick_keyboard(client, message):
     choice = message.text.strip()
+    # Any tap on the main reply menu means the user has entered a section.
+    # Close the keyboard once; it will be restored only when returning home.
+    mark_reply_keyboard_closed(message.from_user.id)
 
     if choice == "🔎 Search Movies":
         await message.reply_text(
             "🔎 <b>Search Movies</b>\n\nSend the <b>movie or series name</b> now.\n\n<i>Example: Avengers Endgame</i>",
+            reply_markup=ReplyKeyboardRemove(),
             parse_mode=enums.ParseMode.HTML,
         )
         return
 
     if choice == "🆕 Latest Movies":
+        await message.reply_text("​", reply_markup=ReplyKeyboardRemove())
         try:
             top_messages = await mdb.get_top_messages(20)
             seen = set()
@@ -102,16 +107,17 @@ async def pm_quick_keyboard(client, message):
                 rows.append([KeyboardButton("🔙 Back to Menu")])
                 await message.reply_text(
                     "🆕 <b>Popular Searches</b>\n\nTap a title below to search it instantly.",
-                    reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True),
+                    reply_markup=ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True, is_persistent=False, placeholder="Tap a title to search…"),
                     parse_mode=enums.ParseMode.HTML,
                 )
             else:
-                await message.reply_text("🆕 No popular titles are available yet.", reply_markup=reply_keyboard())
+                await message.reply_text("🆕 No popular titles are available yet.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]))
         except Exception:
-            await message.reply_text("⚠️ Couldn't load the list right now.", reply_markup=reply_keyboard())
+            await message.reply_text("⚠️ Couldn't load the list right now.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]))
         return
 
     if choice == "⭐ Premium":
+        await message.reply_text("​", reply_markup=ReplyKeyboardRemove())
         await message.reply_text(
             "💎 <b>PREMIUM MEMBERSHIP</b>\n━━━━━━━━━━━━━━━━━━\n\n"
             "🚀 Choose a plan and then select your preferred payment method.\n\n"
@@ -124,6 +130,7 @@ async def pm_quick_keyboard(client, message):
         return
 
     if choice == "📩 Request Movie":
+        await message.reply_text("​", reply_markup=ReplyKeyboardRemove())
         await message.reply_text(
             request_prompt(),
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📩 Start Request", callback_data="request_start")], [InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]),
@@ -133,16 +140,18 @@ async def pm_quick_keyboard(client, message):
         return
 
     if choice == "📚 My Files":
+        await message.reply_text("​", reply_markup=ReplyKeyboardRemove())
         await message.reply_text(
             "📚 <b>My Files</b>\n\n"
             "Your files are delivered here after you select them from search results.\n\n"
             "🔎 Use <b>Search Movies</b> to find a title.",
-            reply_markup=reply_keyboard(),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]),
             parse_mode=enums.ParseMode.HTML,
         )
         return
 
     if choice == "❓ Help":
+        await message.reply_text("​", reply_markup=ReplyKeyboardRemove())
         await message.reply_text(
             "❓ <b>How to use</b>\n\n"
             "1️⃣ Tap <b>Search Movies</b>\n"
@@ -150,19 +159,20 @@ async def pm_quick_keyboard(client, message):
             "3️⃣ Pick quality / language / season\n"
             "4️⃣ Tap the file button to continue\n\n"
             "🍿 Tip: use the exact title for better results.",
-            reply_markup=reply_keyboard(),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]),
             parse_mode=enums.ParseMode.HTML,
         )
         return
 
     if choice == "ℹ️ About":
+        await message.reply_text("​", reply_markup=ReplyKeyboardRemove())
         await message.reply_text(
             f"ℹ️ <b>About {temp.B_NAME}</b>\n\n"
             "🎬 Movie & series search bot\n"
             "⚡ Fast Telegram delivery\n"
             "🎞️ Multiple qualities & languages\n"
             "🔐 Verification and premium support",
-            reply_markup=reply_keyboard(),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="ui_home")]]),
             parse_mode=enums.ParseMode.HTML,
         )
         return
@@ -172,6 +182,7 @@ async def pm_quick_keyboard(client, message):
 @Client.on_message(filters.private & filters.text & filters.regex(r"^🔙 Back to Menu$"))
 async def pm_back_to_menu(client, message):
     from .ui_theme import home_caption, home_keyboard
+    mark_reply_keyboard_open(message.from_user.id)
     await message.reply_text("🏠 <b>Back to Home</b>", reply_markup=reply_keyboard(), parse_mode=enums.ParseMode.HTML)
     return
 
@@ -230,6 +241,7 @@ async def start(client, message):
             parse_mode=enums.ParseMode.HTML
         )
         # Keep the main PM navigation available while the user browses.
+        mark_reply_keyboard_open(message.from_user.id)
         await message.reply_text(
             "⌨️ <b>Quick Menu</b>",
             reply_markup=reply_keyboard(),
@@ -301,11 +313,17 @@ async def start(client, message):
         return
     if len(message.command) == 2 and message.command[1].startswith('getfile'):
         if not await get_setting("content_forwarding_enabled", True):
-            return await message.reply_text("📤 Content delivery is currently disabled by admin.")
-        movies = message.command[1].split("-", 1)[1] 
-        movie = movies.replace('-',' ')
-        message.text = movie 
-        await auto_filter(client, message) 
+            return await message.reply_text("📤 Content delivery is currently disabled by admin.", reply_markup=ReplyKeyboardRemove())
+        try:
+            await message.reply_text("\u200b", reply_markup=ReplyKeyboardRemove())
+            from .ui_theme import mark_reply_keyboard_closed
+            mark_reply_keyboard_closed(message.from_user.id)
+        except Exception:
+            pass
+        movies = message.command[1].split("-", 1)[1]
+        movie = movies.replace('-', ' ')
+        message.text = movie
+        await auto_filter(client, message)
         return
     
     if not await db.has_premium_access(message.from_user.id):
@@ -1470,6 +1488,13 @@ async def removetutorial(bot, message):
 
 @Client.on_callback_query(filters.regex("topsearch"))
 async def topsearch_callback(client, callback_query):
+    from .ui_theme import mark_reply_keyboard_closed
+    mark_reply_keyboard_closed(callback_query.from_user.id)
+    try:
+        notice = await client.send_message(callback_query.from_user.id, "\u200b", reply_markup=ReplyKeyboardRemove())
+        await notice.delete()
+    except Exception:
+        pass
     
     def is_alphanumeric(string):
         return bool(re.match('^[a-zA-Z0-9 ]*$', string))
@@ -1492,8 +1517,11 @@ async def topsearch_callback(client, callback_query):
         keyboard, 
         one_time_keyboard=True, 
         resize_keyboard=True, 
+        is_persistent=False,
         placeholder="Most searches of the day"
     )
+    from .ui_theme import mark_reply_keyboard_open
+    mark_reply_keyboard_open(callback_query.from_user.id)
     await callback_query.message.reply_text("<b>Tᴏᴘ Sᴇᴀʀᴄʜᴇs Oғ Tʜᴇ Dᴀʏ 👇</b>", reply_markup=reply_markup)
     await callback_query.answer()
 
@@ -1520,7 +1548,9 @@ async def top(_, message):
     for i in range(0, len(truncated_messages), 2):
         row = truncated_messages[i:i+2]
         keyboard.append(row)
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True, placeholder="Most searches of the day")
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True, is_persistent=False, placeholder="Most searches of the day")
+    from .ui_theme import mark_reply_keyboard_open
+    mark_reply_keyboard_open(message.from_user.id)
     await message.reply_text(f"<b>Tᴏᴘ Sᴇᴀʀᴄʜᴇs Oғ Tʜᴇ Dᴀʏ 👇</b>", reply_markup=reply_markup)
 
     

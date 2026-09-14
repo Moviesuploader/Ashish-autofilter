@@ -2,6 +2,8 @@ import logging
 from struct import pack
 import re
 import base64
+import hashlib
+from datetime import datetime, timezone
 from pyrogram.file_id import FileId
 from pymongo.errors import DuplicateKeyError
 from umongo import Instance, Document, fields
@@ -101,17 +103,13 @@ async def save_file(bot, media, update_message=None):
     else:
         logger.info(f'{getattr(media, "file_name", "NO_FILE")} is saved to database')
         if await get_status(bot.me.id):
-            if update_message:
-                try:
-                    # The indexing layer owns the status message; keep its existing poster/buttons.
-                    current_caption = update_message.caption.html if update_message.caption else ""
-                    final_caption = current_caption.replace("⏳ <b>Indexing / Uploading...</b>", "✅ <b>Indexed & Uploaded Successfully</b>")
-                    await update_message.edit_caption(final_caption)
-                except Exception:
-                    try: await send_msg(bot, file.file_name, file.caption, file.file_size)
-                    except Exception: pass
-            else:
+            # Publish only after the file is safely committed. send_msg() has an
+            # atomic identity ledger, so 720p/1080p, repeated qualities and
+            # duplicate season uploads do not create repeated update cards.
+            try:
                 await send_msg(bot, file.file_name, file.caption, file.file_size)
+            except Exception:
+                logger.exception("Movie update failed after successful indexing")
         return True, 1
 
 async def get_search_results(chat_id, query, file_type=None, max_results=10, offset=0, filter=False):
@@ -262,67 +260,201 @@ def unpack_new_file_id(new_file_id):
     return file_id, file_ref
 
 
+async def _movie_update_candidates(filename, caption):
+    """Build compact, IMDb-friendly title candidates from noisy upload names."""
+    raw = f"{filename or ''} {caption or ''}"
+    raw = re.sub(r'\.(mp4|mkv|avi|mov|webm|m4v|mp3|flac|pdf)$', '', raw, flags=re.I)
+    raw = re.sub(r'\[.*?\]|\(.*?\)', ' ', raw)
+    raw = re.sub(r'@\S+|www\.\S+', ' ', raw, flags=re.I)
+    raw = raw.replace('_', ' ').replace('.', ' ')
+    raw = re.sub(r'\b(?:2160p|1440p|1080p|720p|480p|360p|4k|8k|web[- ]?dl|web[- ]?rip|bluray|brrip|bdrip|hdrip|hdtv|camrip|hdcam|dvdscr|dvdrip|hdts|hdtc)\b', ' ', raw, flags=re.I)
+    raw = re.sub(r'\b(?:x264|x265|h264|h265|hevc|av1|aac|ddp?\d(?:\.\d)?|5\.1|2\.0|10bit|proper|repack|uncut|sample)\b', ' ', raw, flags=re.I)
+    raw = re.sub(r'\b(?:480p|720p|1080p|2160p)\b', ' ', raw, flags=re.I)
+    raw = re.sub(r'\s+', ' ', raw).strip(' -_')
+    year_match = re.search(r'\b(19|20)\d{2}\b', raw)
+    year = year_match.group(0) if year_match else 'N/A'
+    # Prefer the series/movie identity over episode-specific noise.
+    base = re.sub(r'\b(?:episode|ep|e)\s*[-_. ]?\d+\b.*$', '', raw, flags=re.I).strip(' -_')
+    base = re.sub(r'\b(?:day|part|pt)\s*[-_. ]?\d+\b.*$', '', base, flags=re.I).strip(' -_')
+    season_match = re.search(r'\b(?:s|season)\s*[-_. ]?0*(\d{1,2})\b', raw, flags=re.I)
+    if season_match:
+        season_label = f"Season {int(season_match.group(1))}"
+        # Keep the series name + season, but drop episode/day suffixes.
+        base = re.sub(r'\b(?:episode|ep|e)\s*[-_. ]?\d+\b.*$', '', base, flags=re.I).strip(' -_')
+        base = re.sub(r'\b(?:day|part|pt)\s*[-_. ]?\d+\b.*$', '', base, flags=re.I).strip(' -_')
+        if season_label.lower() not in base.lower():
+            # Search both with and without the season marker.
+            season_base = f"{base} {season_label}".strip()
+        else:
+            season_base = base
+    else:
+        season_base = base
+    candidates = []
+    # For episodic uploads, search the clean series/movie title first.
+    # A query such as "Bigg Boss Season 20" is often less reliable on IMDb
+    # than "Bigg Boss", while the season marker is still retained for our
+    # update-channel deduplication identity.
+    clean_base = re.sub(r'\b(?:s|season)\s*[-_. ]?0*\d{1,2}\b', ' ', base, flags=re.I)
+    clean_base = re.sub(r'\s+', ' ', clean_base).strip(' -_')
+    candidate_order = (clean_base, season_base, base, raw) if season_match else (base, raw)
+    for q in candidate_order:
+        q = re.sub(r'\s+', ' ', q).strip(' -_')
+        if q and q.lower() not in {x.lower() for x in candidates}:
+            candidates.append(q)
+    return candidates[:4], year, season_match.group(1) if season_match else ''
+
+
 async def send_msg(bot, filename, caption, file_size=0, status="⏳ Movie indexed & uploaded successfully."):
-    """Publish a polished movie update to the runtime-configured update channel."""
+    """Publish one final update per movie/series identity.
+
+    The deduplication claim is made before the optional IMDb lookup so repeated
+    qualities/episodes do not repeatedly hit IMDb or flood the update channel.
+    A failed publish releases the claim, allowing a later indexing run to retry.
+    """
+    update_key = None
     try:
         if not await get_setting("movie_updates_enabled", True):
-            return
+            return None
         channel = await get_setting("movie_update_channel", DEENDAYAL_MOVIE_UPDATE_CHANNEL)
         if not channel:
-            return
-        filename = re.sub(r'\(\@\S+\)|\[\@\S+\]|\b@\S+|\bwww\.\S+', '', filename).strip()
-        caption = re.sub(r'\(\@\S+\)|\[\@\S+\]|\b@\S+|\bwww\.\S+', '', caption).strip()
+            return None
+
+        filename = re.sub(r'\(\@\S+\)|\[\@\S+\]|\b@\S+|\bwww\.\S+', '', filename or '').strip()
+        caption = re.sub(r'\(\@\S+\)|\[\@\S+\]|\b@\S+|\bwww\.\S+', '', caption or '').strip()
+        combined = f"{caption} {filename}"
         year_match = re.search(r"\b(19|20)\d{2}\b", caption) or re.search(r"\b(19|20)\d{2}\b", filename)
         year = year_match.group(0) if year_match else "N/A"
-        pattern = r"(?i)(?:s|season)0*(\d{1,2})"
-        season = re.search(pattern, caption) or re.search(pattern, filename)
+        season = re.search(r"(?i)(?:s|season)0*(\d{1,2})", combined)
         season_text = f"S{int(season.group(1)):02d}" if season else ""
-        qualities = ["2160p","1440p","1080p","720p","480p","360p","WEB-DL","WEBRip","BluRay","HDRip","HDTV","HDCAM","CAMRip","DVDscr","DVDRip","HDTS","HDTC"]
-        quality = next((q for q in qualities if q.lower() in caption.lower() or q.lower() in filename.lower()), "N/A")
-        language = ""
-        for lang in CAPTION_LANGUAGES:
-            if lang and lang.lower() in caption.lower() and lang.lower() not in language.lower():
-                language += (", " if language else "") + lang
-        language = language or "N/A"
-        clean_name = re.sub(r"[\(\)\[\]\{\}:;'\-!]", " ", filename)
-        clean_name = re.sub(r"\s+", " ", clean_name).strip()
-        if year != "N/A":
-            clean_name = re.sub(r"\b(19|20)\d{2}\b", "", clean_name).strip(" -")
-        size_text = "N/A"
-        if file_size:
-            size = float(file_size); units = ["B","KB","MB","GB","TB"]; i=0
-            while size >= 1024 and i < len(units)-1: size/=1024; i+=1
-            size_text = f"{size:.2f} {units[i]}"
+        episode_match = re.search(r'\b(?:episode|ep|e)\s*[-_. ]?(\d{1,3})\b', combined, flags=re.I)
+        episode_text = f"E{int(episode_match.group(1)):02d}" if episode_match else ""
+
+        candidates, _, _ = await _movie_update_candidates(filename, caption)
+        fallback_title = candidates[0] if candidates else re.sub(r'\s+', ' ', filename).strip()
+        fallback_title = re.sub(r'\s+', ' ', fallback_title).strip() or "Movie"
+
+        # Claim the logical movie/series identity before doing any network IMDb
+        # work. For a season, all episodes and qualities share one identity.
+        # For movies, qualities/languages/sizes also share one identity.
+        identity = f"{fallback_title.lower()}|{year}|{season_text}" if season_text else f"{fallback_title.lower()}|{year}"
+        update_key = hashlib.sha1(re.sub(r'[^a-z0-9|]+', '', identity).encode()).hexdigest()
+        update_col = db["movie_update_posts"]
         try:
-            imdb = await get_movie_details(f"{clean_name} {year}" if year != "N/A" else clean_name)
-        except Exception:
-            imdb = None
-        title = imdb.get("title") if imdb else clean_name
+            await update_col.insert_one({
+                "_id": update_key,
+                "status": "publishing",
+                "title": fallback_title,
+                "year": year,
+                "season": season_text,
+                "episode": episode_text,
+                "created_at": datetime.now(timezone.utc),
+            })
+        except DuplicateKeyError:
+            return None
+
+        imdb = None
+        # IMDb/Cinemagoer performs blocking network calls internally. It is
+        # wrapped by get_movie_details so the bot event loop remains responsive.
+        for candidate in candidates:
+            try:
+                query = f"{candidate} {year}" if year != "N/A" else candidate
+                imdb = await get_movie_details(query)
+                if imdb:
+                    break
+            except Exception:
+                logger.debug("IMDb lookup failed for candidate %s", candidate, exc_info=True)
+
+        title = imdb.get("title") if imdb else fallback_title
+        title = re.sub(r'\s+', ' ', str(title)).strip() or fallback_title
         rating = imdb.get("rating") if imdb else "N/A"
         genres = imdb.get("genres") if imdb else "N/A"
         plot = imdb.get("plot") if imdb else ""
-        if plot and len(plot) > 300: plot = plot[:297] + "..."
-        season_line = f"📺 Season: <b>{season_text}</b>\n" if season_text else ""
+        if plot and len(plot) > 260:
+            plot = plot[:257] + "..."
+
+        size_text = "N/A"
+        if file_size:
+            size = float(file_size)
+            units = ["B", "KB", "MB", "GB", "TB"]
+            i = 0
+            while size >= 1024 and i < len(units) - 1:
+                size /= 1024
+                i += 1
+            size_text = f"{size:.2f} {units[i]}"
+
+        quality_terms = ["2160p", "1440p", "1080p", "720p", "480p", "360p", "WEB-DL", "WEBRip", "BluRay", "HDRip", "HDTV", "HDCAM", "CAMRip", "DVDscr", "DVDRip", "HDTS", "HDTC"]
+        quality = next((q for q in quality_terms if q.lower() in combined.lower()), "N/A")
+        language = ""
+        for lang in CAPTION_LANGUAGES:
+            if lang and lang.lower() in combined.lower() and lang.lower() not in language.lower():
+                language += (", " if language else "") + lang
+        language = language or "N/A"
+
+        season_line = f"📺 Season: <b>{season_text}</b>" if season_text else ""
+        episode_line = f"🎬 Episode: <b>{episode_text}</b>" if episode_text else ""
+        extra = "\n".join(x for x in (season_line, episode_line) if x)
+        if extra:
+            extra += "\n"
         plot_line = f"\n📝 {plot}" if plot else ""
-        text = (f"🎬 <b>{title}</b> <b>({year})</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"⭐ IMDb: <b>{rating}</b>/10\n"
-                f"🎭 Genre: <b>{genres or 'N/A'}</b>\n"
-                f"🎞️ Quality: <b>{quality}</b>\n"
-                f"🌐 Language: <b>{language}</b>\n"
-                f"💾 Size: <b>{size_text}</b>\n"
-                f"{season_line}\n"
-                f"{status}\n"
-                f"{plot_line}")
-        slug = re.sub(r"[^a-zA-Z0-9]+", "-", f"{title}-{year}").strip("-")[:90]
+        text = (
+            f"🎬 <b>{title}</b>" + (f" <b>({year})</b>" if year != "N/A" else "") + "\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"⭐ IMDb: <b>{rating}</b>/10\n"
+            f"🎭 Genre: <b>{genres or 'N/A'}</b>\n"
+            f"🎞️ Quality: <b>{quality}</b>\n"
+            f"🌐 Language: <b>{language}</b>\n"
+            f"💾 Size: <b>{size_text}</b>\n"
+            f"{extra}\n{status}{plot_line}"
+        )
+
+        # Telegram start parameters are short. Keep the slug comfortably under
+        # the Bot API limit while retaining the resolved title/year for search.
+        search_slug = re.sub(
+            r'[^a-zA-Z0-9]+', '-',
+            f"{title} {year if year != 'N/A' else ''}"
+        ).strip('-').lower()[:54].strip('-')
         bot_username = getattr(temp, "U_NAME", "") or ""
-        btn = [[InlineKeyboardButton("🎬 GET THIS MOVIE", url=f"https://t.me/{bot_username}?start=getfile-{slug}")]] if bot_username else []
+        btn = [[InlineKeyboardButton(
+            "🎬 GET THIS MOVIE",
+            url=f"https://t.me/{bot_username}?start=getfile-{search_slug}"
+        )]] if bot_username and search_slug else []
+        markup = InlineKeyboardMarkup(btn) if btn else None
+
+        poster_sent = False
         if imdb and imdb.get("poster_url"):
-            await bot.send_photo(chat_id=channel, photo=imdb.get("poster_url"), caption=text, reply_markup=InlineKeyboardMarkup(btn) if btn else None)
-        else:
-            await bot.send_message(chat_id=channel, text=text, reply_markup=InlineKeyboardMarkup(btn) if btn else None, disable_web_page_preview=True)
+            try:
+                poster = await fetch_image(imdb["poster_url"])
+                if poster:
+                    await bot.send_photo(chat_id=channel, photo=poster, caption=text, reply_markup=markup)
+                    poster_sent = True
+            except Exception:
+                logger.warning("Movie poster upload failed for %s; falling back to text", title, exc_info=True)
+
+        if not poster_sent:
+            await bot.send_message(
+                chat_id=channel,
+                text=text,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+
+        await update_col.update_one(
+            {"_id": update_key},
+            {"$set": {
+                "status": "sent",
+                "title": title,
+                "updated_at": datetime.now(timezone.utc),
+            }}
+        )
+        return True
     except Exception:
         logger.exception("Movie update publish failed")
+        if update_key:
+            try:
+                await db["movie_update_posts"].delete_one({"_id": update_key, "status": "publishing"})
+            except Exception:
+                logger.debug("Failed to release movie update claim", exc_info=True)
+        return None
 
 async def get_qualities(text, qualities: list):
     """Get all Quality from text"""

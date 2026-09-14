@@ -15,7 +15,7 @@ import pyrogram
 from database.connections_mdb import active_connection, all_connections, delete_connection, if_active, make_active, \
     make_inactive
 from info import *
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, WebAppInfo
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto, WebAppInfo, ReplyKeyboardRemove
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, MessageNotModified, PeerIdInvalid
 from utils import get_size, is_subscribed, get_poster, search_gagala, temp, get_settings, save_group_settings, get_shortlink, get_tutorial, send_all, get_cap, imdb
@@ -41,6 +41,7 @@ from Deendayal_botz.util.file_properties import get_name, get_hash, get_media_fi
 from database.config_db import mdb
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.ERROR)
+from .ui_theme import consume_reply_keyboard_state, mark_reply_keyboard_closed
 
 import requests
 import string
@@ -116,6 +117,7 @@ async def pm_text(bot, message):
     content = message.text
     user = message.from_user.first_name
     user_id = message.from_user.id
+    mark_reply_keyboard_closed(user_id)
     if await handle_user_request_text(bot, message):
         return
     if await handle_admin_reply_text(bot, message):
@@ -133,9 +135,19 @@ async def pm_text(bot, message):
         return  
     try:
         await mdb.update_top_messages(user_id, content)
-        pm_search = await db.pm_search_status(bot_id)
+        # Admin Panel is the single runtime source of truth for PM search.
+        # The legacy per-bot PM_SEARCH value must not silently disable the
+        # current Search Movies flow.
+        pm_search = await get_setting("pm_search_enabled", True)
         if pm_search:
-            await auto_filter(bot, message)
+            try:
+                await auto_filter(bot, message)
+            except Exception:
+                logger.exception("PM movie search failed for user %s", user_id)
+                await message.reply_text(
+                    "⚠️ <b>Search service temporarily failed.</b> Please try the movie name again in a few seconds.",
+                    parse_mode=enums.ParseMode.HTML,
+                )
         else:
             await message.reply_text(
              text=f"<b>🙋 ʜᴇʏ {user} 😍 ,\n\n𝒀𝒐𝒖 𝒄𝒂𝒏 𝒔𝒆𝒂𝒓𝒄𝒉 𝒇𝒐𝒓 𝒎𝒐𝒗𝒊𝒆𝒔 𝒐𝒏𝒍𝒚 𝒐𝒏 𝒐𝒖𝒓 𝑴𝒐𝒗𝒊𝒆 𝑮𝒓𝒐𝒖𝒑. 𝒀𝒐𝒖 𝒂𝒓𝒆 𝒏𝒐𝒕 𝒂𝒍𝒍𝒐𝒘𝒆𝒅 𝒕𝒐 𝒔𝒆𝒂𝒓𝒄𝒉 𝒇𝒐𝒓 𝒎𝒐𝒗𝒊𝒆𝒔 𝒐𝒏 𝑫𝒊𝒓𝒆𝒄𝒕 𝑩𝒐𝒕. 𝑷𝒍𝒆𝒂𝒔𝒆 𝒋𝒐𝒊𝒏 𝒐𝒖𝒓 𝒎𝒐𝒗𝒊𝒆 𝒈𝒓𝒐𝒖𝒑 𝒃𝒚 𝒄𝒍𝒊𝒄𝒌𝒊𝒏𝒈 𝒐𝒏 𝒕𝒉𝒆  𝑹𝑬𝑸𝑼𝑬𝑺𝑻 𝑯𝑬𝑹𝑬 𝒃𝒖𝒕𝒕𝒐𝒏 𝒈𝒊𝒗𝒆𝒏 𝒃𝒆𝒍𝒐𝒘 𝒂𝒏𝒅 𝒔𝒆𝒂𝒓𝒄𝒉 𝒚𝒐𝒖𝒓 𝒇𝒂𝒗𝒐𝒓𝒊𝒕𝒆 𝒎𝒐𝒗𝒊𝒆 𝒕𝒉𝒆𝒓𝒆 👇\n\n<blockquote>आप केवल हमारे 𝑴𝒐𝒗𝒊𝒆 𝑮𝒓𝒐𝒖𝒑 पर ही 𝑴𝒐𝒗𝒊𝒆 𝑺𝒆𝒂𝒓𝒄𝒉 कर सकते हो । आपको 𝑫𝒊𝒓𝒆𝒄𝒕 𝑩𝒐𝒕 पर 𝑴𝒐𝒗𝒊𝒆 𝑺𝒆𝒂𝒓𝒄𝒉 करने की 𝑷𝒆𝒓𝒎𝒊𝒔𝒔𝒊𝒐𝒏 नहीं है कृपया नीचे दिए गए 𝑹𝑬𝑸𝑼𝑬𝑺𝑻 𝑯𝑬𝑹𝑬 वाले 𝑩𝒖𝒕𝒕𝒐𝒏 पर क्लिक करके हमारे 𝑴𝒐𝒗𝒊𝒆 𝑮𝒓𝒐𝒖𝒑 को 𝑱𝒐𝒊𝒏 करें और वहां पर अपनी मनपसंद 𝑴𝒐𝒗𝒊𝒆 𝑺𝒆𝒂𝒓𝒄𝒉 सर्च करें ।</blockquote></b>",   
@@ -933,6 +945,12 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
 @Client.on_callback_query()
 async def cb_handler(client: Client, query: CallbackQuery):
     lazyData = query.data
+    if query.from_user and consume_reply_keyboard_state(query.from_user.id):
+        try:
+            notice = await client.send_message(query.from_user.id, "\u200b", reply_markup=ReplyKeyboardRemove())
+            await notice.delete()
+        except Exception:
+            logger.debug("Reply keyboard cleanup failed", exc_info=True)
     if await get_setting("maintenance_mode", False) and query.from_user.id not in ADMINS:
         return await query.answer("🛠️ Bot is under maintenance. Please try again shortly.", show_alert=True)
 
@@ -978,6 +996,20 @@ async def cb_handler(client: Client, query: CallbackQuery):
             plan_key=parts[1]; network_key="_".join(parts[2:])
             await start_crypto_order(client, query, plan_key, network_key)
         return await query.answer()
+
+    if query.data.startswith("upi_copy_"):
+        from .payment_system import PAYMENTS
+        from bson import ObjectId
+        try:
+            p = await PAYMENTS.find_one({"_id": ObjectId(query.data.split("_", 2)[2]), "user_id": query.from_user.id, "payment_type": "upi"})
+        except Exception:
+            p = None
+        if not p:
+            return await query.answer("UPI payment order not found.", show_alert=True)
+        from info import OWNER_UPI_ID
+        if not OWNER_UPI_ID:
+            return await query.answer("UPI ID is not configured. Please contact admin.", show_alert=True)
+        return await query.answer(f"UPI ID: {OWNER_UPI_ID}", show_alert=True)
 
     if query.data.startswith("upisubmit_"):
         from .payment_system import PAYMENTS
@@ -1071,6 +1103,14 @@ async def cb_handler(client: Client, query: CallbackQuery):
                 await query.message.edit_text(text, reply_markup=home_keyboard(), disable_web_page_preview=True)
         except Exception:
             await query.message.reply_text(text, reply_markup=home_keyboard(), disable_web_page_preview=True)
+        # Restore the single main Reply Keyboard only on Home. This keeps every
+        # inner section (including payment/admin flows) keyboard-free.
+        try:
+            from .ui_theme import reply_keyboard, mark_reply_keyboard_open
+            mark_reply_keyboard_open(user.id)
+            await client.send_message(user.id, "🏠 <b>Main Menu</b>", reply_markup=reply_keyboard(), parse_mode=enums.ParseMode.HTML)
+        except Exception:
+            logger.debug("Could not restore main reply keyboard", exc_info=True)
         return await query.answer()
 
     if query.data == "ui_search":

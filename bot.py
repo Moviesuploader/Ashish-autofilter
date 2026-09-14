@@ -1,7 +1,3 @@
-import sys
-import glob
-import importlib
-from pathlib import Path
 from pyrogram import Client, idle, __version__
 from pyrogram.errors import FloodWait
 from pyrogram.raw.all import layer
@@ -35,9 +31,6 @@ logging.getLogger("aiohttp").setLevel(logging.ERROR)
 logging.getLogger("aiohttp.web").setLevel(logging.ERROR)
 
 botStartTime = time.time()
-ppath = "plugins/*.py"
-files = glob.glob(ppath)
-
 async def _start_health_server():
     """Start the HTTP health endpoint before Telegram authorization.
 
@@ -87,17 +80,11 @@ async def Deendayal_start():
     bot_info = await DeendayalBot.get_me()
     DeendayalBot.username = bot_info.username
     await initialize_clients()
-    for name in files:
-        with open(name) as a:
-            patt = Path(a.name)
-            plugin_name = patt.stem.replace(".py", "")
-            plugins_dir = Path(f"plugins/{plugin_name}.py")
-            import_path = "plugins.{}".format(plugin_name)
-            spec = importlib.util.spec_from_file_location(import_path, plugins_dir)
-            load = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(load)
-            sys.modules["plugins." + plugin_name] = load
-            print("Deendayal dhakad Imported => " + plugin_name)
+    # Plugins are already loaded by Pyrogram via plugins={"root": "plugins"}
+    # in DeendayalBot. Do not import them a second time here: duplicate
+    # imports register every message/callback handler twice and can cause
+    # duplicate replies, duplicate indexing updates and payment callbacks.
+    logging.info("Pyrogram plugin system loaded the plugins; skipping manual reload.")
     try:
         from database.admin_settings_db import ensure_settings, get_setting, set_setting
         await ensure_settings()

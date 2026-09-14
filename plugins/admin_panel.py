@@ -71,7 +71,7 @@ async def render_page(key):
               [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
     elif key == "payments":
         text = "💳 <b>PAYMENT METHODS</b>\n━━━━━━━━━━━━━━━━━━\nOnly enabled methods will appear to users.\n\n💎 <b>Premium Plans</b> can be enabled/disabled and edited from Manage Plans."
-        kb = [row("💳 UPI", s.get("payment_upi_enabled"), "payment_upi_enabled"), row("🪙 Crypto", s.get("payment_crypto_enabled"), "payment_crypto_enabled"), row("⭐ Telegram Stars", s.get("payment_stars_enabled"), "payment_stars_enabled"), [InlineKeyboardButton("💎 Manage Plans", callback_data="adm_plans")], [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
+        kb = [row("💳 UPI", s.get("payment_upi_enabled"), "payment_upi_enabled"), row("🪙 Crypto", s.get("payment_crypto_enabled"), "payment_crypto_enabled"), row("⭐ Telegram Stars", s.get("payment_stars_enabled"), "payment_stars_enabled"), [InlineKeyboardButton("💎 Manage Plans", callback_data="adm_plans")], [InlineKeyboardButton("📜 Payment History", callback_data="adm_payment_history")], [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
     elif key == "channels":
         def fmt(v): return "Not set" if not v else f"<code>{v}</code>"
         text = ("📡 <b>CHANNEL SETTINGS</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -85,7 +85,7 @@ async def render_page(key):
                 f"💾 Backup: <b>{yn(s.get('backup_enabled'))}</b>\n"
                 f"📝 Logging: <b>{yn(s.get('logging_enabled'))}</b>\n\n"
                 "To set a channel, forward any message from that channel to the bot.")
-        kb = [[InlineKeyboardButton("📩 Set Request Channel", callback_data="adm_setchannel:request_channel")], [InlineKeyboardButton("📣 Set Movie Update", callback_data="adm_setchannel:movie_update_channel")], [InlineKeyboardButton("💾 Set Backup/File", callback_data="adm_setchannel:backup_channel")], [InlineKeyboardButton("🔐 Set Auth Channel", callback_data="adm_setchannel:auth_channels")], [InlineKeyboardButton("📝 Set Log Channel", callback_data="adm_setchannel:log_channel")], [InlineKeyboardButton("💎 Set Premium Logs", callback_data="adm_setchannel:premium_logs")], [InlineKeyboardButton("🔐 Auth ON/OFF", callback_data="adm_toggle:auth_enabled"), InlineKeyboardButton("💾 Backup ON/OFF", callback_data="adm_toggle:backup_enabled")], [InlineKeyboardButton("📝 Logging ON/OFF", callback_data="adm_toggle:logging_enabled")], [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
+        kb = [[InlineKeyboardButton("📩 Set Request Channel", callback_data="adm_setchannel:request_channel")], [InlineKeyboardButton("📣 Set Movie Update", callback_data="adm_setchannel:movie_update_channel")], [InlineKeyboardButton("💾 Set Backup/File", callback_data="adm_setchannel:backup_channel")], [InlineKeyboardButton("🔐 Set Auth Channel", callback_data="adm_setchannel:auth_channels")], [InlineKeyboardButton("📝 Set Log Channel", callback_data="adm_setchannel:log_channel")], [InlineKeyboardButton("💳 Set Payment Logs", callback_data="adm_setchannel:premium_logs")], [InlineKeyboardButton("🔐 Auth ON/OFF", callback_data="adm_toggle:auth_enabled"), InlineKeyboardButton("💾 Backup ON/OFF", callback_data="adm_toggle:backup_enabled")], [InlineKeyboardButton("📝 Logging ON/OFF", callback_data="adm_toggle:logging_enabled")], [InlineKeyboardButton("🔙 Dashboard", callback_data="adm_home")]]
     elif key == "referral":
         reward = int(s.get("referral_reward_points", 5)); threshold = int(s.get("referral_redeem_points", 20)); days = int(s.get("referral_redeem_days", 10))
         text = ("🤝 <b>REFERRAL SYSTEM</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -117,6 +117,8 @@ async def render_page(key):
 async def _hide_admin_reply_keyboard(client, chat_id):
     """Remove the normal user Reply Keyboard while admin UI is open."""
     try:
+        from .ui_theme import mark_reply_keyboard_closed
+        mark_reply_keyboard_closed(int(chat_id))
         notice = await client.send_message(int(chat_id), "⌨️", reply_markup=ReplyKeyboardRemove())
         await asyncio.sleep(0.15)
         await notice.delete()
@@ -126,7 +128,8 @@ async def _hide_admin_reply_keyboard(client, chat_id):
 
 async def _show_admin_reply_keyboard(client, chat_id):
     try:
-        from .ui_theme import reply_keyboard
+        from .ui_theme import reply_keyboard, mark_reply_keyboard_open
+        mark_reply_keyboard_open(int(chat_id))
         await client.send_message(int(chat_id), "⌨️ <b>Menu keyboard enabled.</b>", reply_markup=reply_keyboard(), parse_mode=enums.ParseMode.HTML)
     except Exception:
         pass
@@ -202,6 +205,19 @@ async def admin_callbacks(client, query):
         return await query.answer("Default: 5 points per qualified referral. Change with /refreward POINTS.", show_alert=True)
     if data == "adm_ref_redeem":
         return await query.answer("Default: 20 points → 10 days Premium. Change with /refredeem POINTS DAYS.", show_alert=True)
+    if data == "adm_payment_history":
+        docs = await mdb.db["payment_action_history"].find({}).sort("created_at", -1).to_list(length=20)
+        lines = ["📜 <b>PAYMENT HISTORY</b>", "━━━━━━━━━━━━━━━━━━"]
+        if not docs:
+            lines.append("No payment actions recorded yet.")
+        else:
+            for d in docs:
+                ts = d.get("created_at")
+                stamp = ts.strftime("%d-%m-%Y %H:%M") if hasattr(ts, "strftime") else str(ts or "")
+                action = str(d.get("action", "unknown")).replace("_", " ").title()
+                lines.append(f"• <b>{action}</b> — <code>{d.get('order_id','-')}</code>\n  User: <code>{d.get('user_id','-')}</code> • {stamp}")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="adm_payment_history")], [InlineKeyboardButton("🔙 Payments", callback_data="adm_page:payments")]])
+        return await query.message.edit_text("\n".join(lines), reply_markup=kb, parse_mode=enums.ParseMode.HTML)
     if data == "adm_plans":
         plans = s = await get_setting("premium_plans", {}) or {}
         from plugins.payment_system import PLANS

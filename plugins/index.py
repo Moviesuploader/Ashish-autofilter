@@ -164,21 +164,10 @@ async def index_files_to_db(lst_msg_id, chat, msg, bot):
                     continue
                 media.file_type = message.media.value
                 media.caption = message.caption
-                # Publish a per-movie processing card. save_file will publish the final
-                # uploaded card after the file is committed; this status is informational.
-                pending_update = None
-                try:
-                    raw_id, _ = unpack_new_file_id(media.file_id)
-                    duplicate_exists = bool(await Media.find_one({"file_id": raw_id}) or await Media2.find_one({"file_id": raw_id}))
-                except Exception:
-                    duplicate_exists = False
-                if not duplicate_exists:
-                    try:
-                        if await get_setting("movie_updates_enabled", True) and await get_setting("movie_update_channel", None):
-                            pending_update = await send_msg(bot, media.file_name, media.caption, media.file_size, status="⏳ <b>Indexing / Uploading...</b>")
-                    except Exception:
-                        pending_update = None
-                aynav, vnay = await save_file(bot, media, update_message=pending_update)
+                # Save first. The database layer publishes ONE final update card only
+                # after a successful insert, so indexing never creates a temporary
+                # "Uploading" card for every quality/episode variant.
+                aynav, vnay = await save_file(bot, media, update_message=None)
                 if aynav:
                     total_files += 1
                 elif vnay == 0:

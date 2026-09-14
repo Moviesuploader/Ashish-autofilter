@@ -16,6 +16,26 @@ ABOUT = "ℹ️ About"
 SUPPORT = "💬 Support"
 SHARE = "📤 Share Bot"
 
+REPLY_KEYBOARD_OPEN_USERS = set()
+
+def mark_reply_keyboard_open(user_id):
+    if user_id:
+        REPLY_KEYBOARD_OPEN_USERS.add(int(user_id))
+
+def mark_reply_keyboard_closed(user_id):
+    if user_id:
+        REPLY_KEYBOARD_OPEN_USERS.discard(int(user_id))
+
+def consume_reply_keyboard_state(user_id):
+    """Return True once when the main reply keyboard is known to be open."""
+    if not user_id:
+        return False
+    user_id = int(user_id)
+    if user_id in REPLY_KEYBOARD_OPEN_USERS:
+        REPLY_KEYBOARD_OPEN_USERS.discard(user_id)
+        return True
+    return False
+
 NAV_LABELS = {
     SEARCH, LATEST, PREMIUM, REQUEST, MY_FILES, HELP, ABOUT, SUPPORT, HOME, BACK, CLOSE,
     "🔙 Back to Menu",
@@ -115,6 +135,7 @@ def reply_keyboard():
             [KeyboardButton(HELP), KeyboardButton(ABOUT)],
         ],
         resize_keyboard=True,
-        is_persistent=True,
+        one_time_keyboard=True,
+        is_persistent=False,
         placeholder="Choose an option…",
     )

@@ -41,7 +41,7 @@ async def fetch_image(url, size=(720, 720)):
         print(f"Unexpected error in fetch_image: {e}")
     return None
 
-async def get_movie_details(query, id=False, file=None):
+def _get_movie_details_sync(query, id=False, file=None):
     try:
         if not id:
             query = query.strip().lower()
@@ -125,6 +125,21 @@ async def get_movie_details(query, id=False, file=None):
             'url': f'https://www.imdb.com/title/tt{movieid}'
         }
 
+    except Exception as e:
+        print(f"An error occurred in _get_movie_details_sync: {e}")
+        return None
+
+
+async def get_movie_details(query, id=False, file=None):
+    """Run Cinemagoer's blocking HTTP work off the bot event loop."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_get_movie_details_sync, query, id, file),
+            timeout=15,
+        )
+    except asyncio.TimeoutError:
+        print(f"IMDb lookup timed out: {query}")
+        return None
     except Exception as e:
         print(f"An error occurred in get_movie_details: {e}")
         return None
