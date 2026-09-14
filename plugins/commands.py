@@ -1601,7 +1601,9 @@ async def set_pm_search(client, message):
         await message.reply_text("<b>💔 Invalid option. Please send 'on' or 'off' after the command..</b>")
         return
     try:
-        await db.update_pm_search_status(bot_id, enable_status)
+        await get_setting("pm_search_enabled", True)
+        from database.admin_settings_db import set_setting
+        await set_setting("pm_search_enabled", enable_status, message.from_user.id)
         response_text = (
             "<b> ᴘᴍ ꜱᴇᴀʀᴄʜ ᴇɴᴀʙʟᴇᴅ ✅</b>" if enable_status 
             else "<b> ᴘᴍ ꜱᴇᴀʀᴄʜ ᴅɪꜱᴀʙʟᴇᴅ ❌</b>"

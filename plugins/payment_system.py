@@ -11,7 +11,7 @@ from pymongo import ReturnDocument, ASCENDING
 from pymongo.errors import DuplicateKeyError
 from bson import ObjectId
 
-from info import ADMINS, OWNER_UPI_ID, QR_CODE, PREMIUM_LOGS
+from info import ADMINS, OWNERID, OWNER_UPI_ID, QR_CODE, PREMIUM_LOGS
 from database.config_db import mdb
 from database.admin_settings_db import get_setting
 from database.users_chats_db import db
@@ -121,7 +121,7 @@ async def _record_payment_history(payment, action, admin_id=None, details=None):
             "created_at": _now(),
         })
     except Exception:
-        pass
+        logger.exception("Payment history write failed for action=%s order=%s", action, payment.get("order_id"))
 
 
 async def _ensure_one_payment_index(keys, **kwargs):
@@ -614,6 +614,8 @@ async def start_upi(client, query, plan_key):
         order=f"UPI-{query.from_user.id}-{uuid.uuid4().hex[:10].upper()}"
         doc={"order_id":order,"user_id":query.from_user.id,"plan":plan_key,"days":p["days"],"amount_inr":float(p["price"]),"payment_type":"upi","status":"awaiting_proof","created_at":_now(),"expires_at":_now()+timedelta(minutes=int(os.getenv("UPI_PAYMENT_EXPIRY_MINUTES","60")))}
         res=await PAYMENTS.insert_one(doc); ref=str(res.inserted_id)
+        created_payment = await PAYMENTS.find_one({"_id": res.inserted_id}) or {**doc, "_id": res.inserted_id}
+        await _record_payment_history(created_payment, "upi_order_created", details={"amount_inr": float(p["price"]), "plan": plan_key})
         uri=_upi_uri(p["price"],order)
         text=(f"💳 <b>UPI PAYMENT</b>\n━━━━━━━━━━━━━━━━━━\n\n{p['name']} • {p['days']} Days\n💰 Exact Amount: <b>₹{p['price']:.2f}</b>\n\n📌 UPI ID: <code>{OWNER_UPI_ID}</code>\n🧾 Order ID: <code>{order}</code>\n\n1️⃣ Pay the exact amount.\n2️⃣ Tap <b>I've Paid</b>.\n3️⃣ Submit either your <b>UTR / transaction reference</b> OR a <b>payment screenshot</b>.\n4️⃣ Admin will verify the proof manually. <b>Premium activates only after approval.</b>\n\n⚠️ Screenshot must clearly show the payment status, amount and transaction/reference details.\n⚠️ Do not send OTP, UPI PIN or banking password.")
         # Telegram Bot API inline URL buttons do not reliably support the custom
@@ -724,7 +726,16 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
     delivered = []
     failures = []
 
-    for admin in ADMINS:
+    admin_destinations = []
+    for admin in list(ADMINS) + [OWNERID]:
+        try:
+            admin_id = int(admin)
+        except (TypeError, ValueError):
+            continue
+        if admin_id and admin_id not in admin_destinations:
+            admin_destinations.append(admin_id)
+
+    for admin in admin_destinations:
         try:
             if screenshot_file_id:
                 if screenshot_media_type == "document":
@@ -808,6 +819,26 @@ async def submit_utr(client, message, ref):
             "Please contact admin and share this Order ID. Do not submit your UPI PIN/OTP.",
             parse_mode=enums.ParseMode.HTML,
         )
+
+@Client.on_message(filters.private & filters.text, group=-20)
+async def premium_payment_utr_handler(client, message):
+    """Handle UTR/reference text before the broad PM movie-search handler."""
+    try:
+        p = await PAYMENTS.find_one(
+            {"user_id": message.from_user.id, "status": "awaiting_utr", "proof_mode": "utr"},
+            sort=[("created_at", -1)],
+        )
+    except Exception:
+        logger.exception("Could not lookup pending UTR for user %s", message.from_user.id)
+        return
+    if not p:
+        return
+    await submit_utr(client, message, str(p["_id"]))
+    try:
+        message.stop_propagation()
+    except Exception:
+        pass
+
 
 async def submit_screenshot(client, message, ref):
     photo = message.photo
@@ -951,7 +982,7 @@ async def admin_payment_action(client, query, ref, approve):
     except Exception:pass
     await query.answer("Premium activated successfully.")
 
-@Client.on_message(filters.private & filters.photo)
+@Client.on_message(filters.private & filters.photo, group=-20)
 async def premium_payment_screenshot_handler(client, message):
     # A screenshot can be submitted instead of a UTR. The latest awaiting UPI
     # payment for this user is atomically claimed so duplicate screenshots do
@@ -960,9 +991,13 @@ async def premium_payment_screenshot_handler(client, message):
     if not p:
         return
     await submit_screenshot(client, message, str(p["_id"]))
+    try:
+        message.stop_propagation()
+    except Exception:
+        pass
 
 
-@Client.on_message(filters.private & filters.document)
+@Client.on_message(filters.private & filters.document, group=-20)
 async def premium_payment_screenshot_document_handler(client, message):
     # Screenshots may also be sent as Telegram files/documents. Accept only
     # image MIME types while a UPI order is awaiting proof.

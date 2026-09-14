@@ -88,7 +88,11 @@ async def get_shortlink(url):
 async def give_filter(client, message):
     if EMOJI_MODE:
         await message.react(emoji=random.choice(REACTIONS), big=True)
-    await mdb.update_top_messages(message.from_user.id, message.text)
+    try:
+        if message.from_user:
+            await mdb.update_top_messages(message.from_user.id, message.text)
+    except Exception:
+        logger.debug("Could not update group search statistics", exc_info=True)
     if message.chat.id != SUPPORT_CHAT_ID:
         manual = await manual_filters(client, message)
         if manual == False:
@@ -99,6 +103,10 @@ async def give_filter(client, message):
                 await auto_filter(client, message)
             except Exception:
                 logger.exception("Group movie search failed for %s", message.chat.id)
+                try:
+                    await message.reply_text("⚠️ Search service temporarily failed. Please try the movie name again in a few seconds.")
+                except Exception:
+                    pass
     else:
         search = message.text
         temp_files, temp_offset, total_results = await get_search_results(chat_id=message.chat.id, query=search.lower(), offset=0, filter=True)
@@ -130,27 +138,11 @@ async def pm_text(bot, message):
     if content.startswith(("/", "#")):
         return  
     try:
-        # UPI UTR proof must be handled before normal movie search. The old
-        # payment plugin used a broad private-text handler that matched every
-        # text message and could swallow movie searches. Keep proof handling
-        # inside the main PM router so normal searches always reach auto_filter.
-        try:
-            pending_utr = await mdb.db["premium_payments"].find_one(
-                {
-                    "user_id": user_id,
-                    "status": "awaiting_utr",
-                    "proof_mode": "utr",
-                },
-                sort=[("created_at", -1)],
-            )
-        except Exception:
-            pending_utr = None
-        if pending_utr:
-            return await submit_utr(bot, message, str(pending_utr["_id"]))
-
         await mdb.update_top_messages(user_id, content)
-        # Direct PM movie-name search is always enabled. Users only need to
-        # type the movie/series name; /search is not required.
+        # Direct PM movie-name search is controlled by the Admin Panel.
+        # Ordinary movie names never require /search.
+        if not await get_setting("pm_search_enabled", True):
+            return await message.reply_text("🔎 PM movie search is currently disabled by admin.")
         try:
             await auto_filter(bot, message)
         except Exception:
@@ -258,7 +250,7 @@ async def next_page(bot, query):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", callback_data=f'{pre}#{file.file_id}'
+                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", url=f"https://t.me/{temp.U_NAME}?start={pre}_{file.file_id}"
                 ),
             ]
             for file in files
@@ -443,6 +435,8 @@ async def qualities_cb_handler(client: Client, query: CallbackQuery):
     #     search = BUTTONS.get(key)
     #     BUTTONS[key+"1"] = search
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("⚠️ This search has expired. Please search the title again.", show_alert=True)
     search = search.replace(' ', '_')
     btn = []
     for i in range(0, len(QUALITIES)-1, 2):
@@ -509,7 +503,7 @@ async def filter_qualities_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", callback_data=f'{pre}#{file.file_id}'
+                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", url=f"https://t.me/{temp.U_NAME}?start={pre}_{file.file_id}"
                 ),
             ]
             for file in files
@@ -610,6 +604,8 @@ async def languages_cb_handler(client: Client, query: CallbackQuery):
     #     search = BUTTONS.get(key)
     #     BUTTONS[key+"1"] = search
     search = FRESH.get(key)
+    if not search:
+        return await query.answer("⚠️ This search has expired. Please search the title again.", show_alert=True)
     search = search.replace(' ', '_')
     btn = []
     for i in range(0, len(LANGUAGES)-1, 2):
@@ -676,7 +672,7 @@ async def filter_languages_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", callback_data=f'{pre}#{file.file_id}'
+                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", url=f"https://t.me/{temp.U_NAME}?start={pre}_{file.file_id}"
                 ),
             ]
             for file in files
@@ -888,7 +884,7 @@ async def filter_seasons_cb_handler(client: Client, query: CallbackQuery):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", callback_data=f'{pre}#{file.file_id}'
+                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", url=f"https://t.me/{temp.U_NAME}?start={pre}_{file.file_id}"
                 ),
             ]
             for file in files
@@ -1491,7 +1487,7 @@ async def cb_handler(client: Client, query: CallbackQuery):
     
     elif query.data.startswith("send_fsall"):
         temp_var, ident, key, offset = query.data.split("#")
-        search = BUTTON0.get(key)
+        search = BUTTONS0.get(key)
         if not search:
             await query.answer(script.OLD_ALRT_TXT.format(query.from_user.first_name),show_alert=True)
             return
@@ -2755,7 +2751,7 @@ async def auto_filter(client, msg, spoll=False):
         btn = [
             [
                 InlineKeyboardButton(
-                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", callback_data=f'{pre}#{file.file_id}'
+                    text=f"[{get_size(file.file_size)}] {' '.join(filter(lambda x: not x.startswith('[') and not x.startswith('@') and not x.startswith('www.'), file.file_name.split()))}", url=f"https://t.me/{temp.U_NAME}?start={pre}_{file.file_id}"
                 ),
             ]
             for file in files
@@ -3174,7 +3170,8 @@ async def manual_filters(client, message, text=False):
 
                 except Exception as e:
                     logger.exception(e)
-                break
+                    return False
+                return True
     else:
         return False
 
