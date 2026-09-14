@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 import aiohttp
 import qrcode
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
 from pymongo import ReturnDocument, ASCENDING
 from pymongo.errors import DuplicateKeyError
@@ -570,7 +570,7 @@ async def stars_successful_payment_handler(client, message):
             f"✅ <b>Premium is now active.</b>\n"
             f"⌛ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>\n\n"
             f"🧾 Order: <code>{claim['order_id']}</code>",
-            parse_mode="HTML",
+            parse_mode=enums.ParseMode.HTML,
         )
     except Exception:
         pass
@@ -629,12 +629,12 @@ async def start_upi(client, query, plan_key):
         # This is intentionally done before generating/sending the QR so a QR
         # failure can never make the UPI button look dead or leave a blank UI.
         try:
-            await query.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            await query.message.edit_text(text, reply_markup=kb, parse_mode=enums.ParseMode.HTML)
         except Exception:
             # Some older/media messages cannot be edited as text; send the
             # guaranteed text checkout instead.
             try:
-                await client.send_message(query.from_user.id, text, reply_markup=kb, parse_mode="HTML")
+                await client.send_message(query.from_user.id, text, reply_markup=kb, parse_mode=enums.ParseMode.HTML)
             except Exception as send_exc:
                 logger.exception("UPI text checkout send failed")
                 return await query.answer(f"UPI checkout could not open: {str(send_exc)[:120]}", show_alert=True)
@@ -643,7 +643,7 @@ async def start_upi(client, query, plan_key):
         # generated photo, the already-visible text checkout remains usable.
         if uri:
             try:
-                await client.send_photo(query.from_user.id, photo=_qr_bytes(uri), caption="📱 <b>Scan this UPI QR</b> to pay the exact amount.", parse_mode="HTML")
+                await client.send_photo(query.from_user.id, photo=_qr_bytes(uri), caption="📱 <b>Scan this UPI QR</b> to pay the exact amount.", parse_mode=enums.ParseMode.HTML)
             except Exception:
                 logger.exception("UPI QR send failed; text checkout remains available")
 
@@ -715,11 +715,11 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
         try:
             if screenshot_file_id:
                 if screenshot_media_type == "document":
-                    await client.send_document(int(admin), screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
+                    await client.send_document(int(admin), screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
                 else:
-                    await client.send_photo(int(admin), screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
+                    await client.send_photo(int(admin), screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
             else:
-                await client.send_message(int(admin), admin_text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_message(int(admin), admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
         except Exception:
             pass
     payment_logs = await _payment_logs_chat_id()
@@ -727,11 +727,11 @@ async def _send_upi_review(client, p, proof_type="UTR", proof_value=None, screen
         try:
             if screenshot_file_id:
                 if screenshot_media_type == "document":
-                    await client.send_document(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
+                    await client.send_document(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
                 else:
-                    await client.send_photo(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode="HTML")
+                    await client.send_photo(payment_logs, screenshot_file_id, caption=admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
             else:
-                await client.send_message(payment_logs, admin_text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_message(payment_logs, admin_text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
         except Exception:
             pass
     await _record_payment_history(p, "review_posted", details={"proof_type": proof_type})
@@ -763,7 +763,7 @@ async def submit_utr(client, message, ref):
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
     await _record_payment_history(p, "proof_submitted", details={"proof_type": "utr", "utr": utr})
-    await message.reply_text(f"✅ <b>UTR submitted.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your payment proof is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode="HTML")
+    await message.reply_text(f"✅ <b>UTR submitted.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your payment proof is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode=enums.ParseMode.HTML)
     await _send_upi_review(client, p, "UTR", utr)
 
 async def submit_screenshot(client, message, ref):
@@ -788,7 +788,7 @@ async def submit_screenshot(client, message, ref):
         await message.reply_text("⚠️ This payment request is no longer awaiting payment proof.")
         return
     await _record_payment_history(p, "proof_submitted", details={"proof_type": "screenshot", "media_type": "photo"})
-    await message.reply_text(f"✅ <b>Payment screenshot received.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode="HTML")
+    await message.reply_text(f"✅ <b>Payment screenshot received.</b>\n\n🧾 Order: <code>{p['order_id']}</code>\n💰 Amount: ₹{p['amount_inr']:.2f}\n\n⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.", parse_mode=enums.ParseMode.HTML)
     await _send_upi_review(client, p, "Screenshot", screenshot_file_id=photo.file_id, screenshot_media_type="photo")
 
 async def _copy_payment_to_logs(client, p, note="🗂 MOVED TO PAYMENT LOGS"):
@@ -809,11 +809,11 @@ async def _copy_payment_to_logs(client, p, note="🗂 MOVED TO PAYMENT LOGS"):
     try:
         if p.get("screenshot_file_id"):
             if p.get("screenshot_media_type") == "document":
-                await client.send_document(payment_logs, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_document(payment_logs, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
             else:
-                await client.send_photo(payment_logs, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode="HTML")
+                await client.send_photo(payment_logs, p["screenshot_file_id"], caption=text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
         else:
-            await client.send_message(payment_logs, text, reply_markup=buttons, parse_mode="HTML")
+            await client.send_message(payment_logs, text, reply_markup=buttons, parse_mode=enums.ParseMode.HTML)
         await _record_payment_history(p, "moved_to_payment_logs", details={"note": note})
         return True
     except Exception:
@@ -842,9 +842,9 @@ async def admin_payment_action(client, query, ref, approve):
             return await query.answer("Payment was already handled.",show_alert=True)
         try:
             if query.message.photo:
-                await query.message.edit_caption((query.message.caption or "")+"\n\n🗂 <b>CANCELLED / MOVED TO PAYMENT LOGS</b>",reply_markup=None,parse_mode="HTML")
+                await query.message.edit_caption((query.message.caption or "")+"\n\n🗂 <b>CANCELLED / MOVED TO PAYMENT LOGS</b>",reply_markup=None,parse_mode=enums.ParseMode.HTML)
             else:
-                await query.message.edit_text((query.message.text or "")+"\n\n🗂 <b>CANCELLED / MOVED TO PAYMENT LOGS</b>",reply_markup=None,parse_mode="HTML")
+                await query.message.edit_text((query.message.text or "")+"\n\n🗂 <b>CANCELLED / MOVED TO PAYMENT LOGS</b>",reply_markup=None,parse_mode=enums.ParseMode.HTML)
         except Exception: pass
         await _record_payment_history(changed, "cancelled_to_logs", admin_id=query.from_user.id)
         moved = await _copy_payment_to_logs(client, changed)
@@ -858,13 +858,13 @@ async def admin_payment_action(client, query, ref, approve):
             )
             try:
                 if query.message.photo:
-                    await query.message.edit_caption(query.message.caption or "", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{oid}")], [InlineKeyboardButton("❌ CANCEL", callback_data=f"paycancel_{oid}")]]), parse_mode="HTML")
+                    await query.message.edit_caption(query.message.caption or "", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{oid}")], [InlineKeyboardButton("❌ CANCEL", callback_data=f"paycancel_{oid}")]]), parse_mode=enums.ParseMode.HTML)
                 else:
-                    await query.message.edit_text(query.message.text or "", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{oid}")], [InlineKeyboardButton("❌ CANCEL", callback_data=f"paycancel_{oid}")]]), parse_mode="HTML")
+                    await query.message.edit_text(query.message.text or "", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ APPROVE & ACTIVATE", callback_data=f"payapprove_{oid}")], [InlineKeyboardButton("❌ CANCEL", callback_data=f"paycancel_{oid}")]]), parse_mode=enums.ParseMode.HTML)
             except Exception:
                 pass
             return await query.answer("Payment Logs channel is unavailable. Payment remains pending review.", show_alert=True)
-        try: await client.send_message(p["user_id"],f"ℹ️ Your UPI payment proof for <b>{(await get_plan(p['plan']))['name']}</b> is still under review.\n\n🧾 Order: <code>{p['order_id']}</code>",parse_mode="HTML")
+        try: await client.send_message(p["user_id"],f"ℹ️ Your UPI payment proof for <b>{(await get_plan(p['plan']))['name']}</b> is still under review.\n\n🧾 Order: <code>{p['order_id']}</code>",parse_mode=enums.ParseMode.HTML)
         except Exception: pass
         return await query.answer("Moved to Payment Logs. Approval is still available there.")
     claimed=await PAYMENTS.find_one_and_update(
@@ -886,22 +886,13 @@ async def admin_payment_action(client, query, ref, approve):
     await _record_payment_history(approved_payment, "approved_and_activated", admin_id=query.from_user.id, details={"premium_expiry": expiry})
     try:
         if query.message.photo:
-            await query.message.edit_caption((query.message.caption or "")+f"\n\n✅ <b>APPROVED & PREMIUM ACTIVATED</b>\n⏳ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>",reply_markup=None,parse_mode="HTML")
+            await query.message.edit_caption((query.message.caption or "")+f"\n\n✅ <b>APPROVED & PREMIUM ACTIVATED</b>\n⏳ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>",reply_markup=None,parse_mode=enums.ParseMode.HTML)
         else:
-            await query.message.edit_text((query.message.text or "")+f"\n\n✅ <b>APPROVED & PREMIUM ACTIVATED</b>\n⏳ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>",reply_markup=None,parse_mode="HTML")
+            await query.message.edit_text((query.message.text or "")+f"\n\n✅ <b>APPROVED & PREMIUM ACTIVATED</b>\n⏳ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>",reply_markup=None,parse_mode=enums.ParseMode.HTML)
     except Exception: pass
-    try: await client.send_message(p["user_id"],f"🎉 <b>Premium activated!</b>\n\n💎 Plan: {(await get_plan(p['plan']))['name']}\n⏰ Duration: {p['days']} days\n🧾 Order: <code>{p['order_id']}</code>\n\n⌛ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>\n\nThank you for your purchase! ❤️",parse_mode="HTML")
+    try: await client.send_message(p["user_id"],f"🎉 <b>Premium activated!</b>\n\n💎 Plan: {(await get_plan(p['plan']))['name']}\n⏰ Duration: {p['days']} days\n🧾 Order: <code>{p['order_id']}</code>\n\n⌛ Expiry: <code>{expiry.strftime('%d-%m-%Y %I:%M %p')}</code>\n\nThank you for your purchase! ❤️",parse_mode=enums.ParseMode.HTML)
     except Exception:pass
     await query.answer("Premium activated successfully.")
-
-@Client.on_message(filters.private & filters.text & ~filters.regex(r"^/"))
-async def premium_payment_text_handler(client, message):
-    # Only consume text when this user has a payment waiting for a UTR.
-    p=await PAYMENTS.find_one({"user_id":message.from_user.id,"status":"awaiting_utr","proof_mode":"utr"},sort=[("created_at",-1)])
-    if not p:return
-    await submit_utr(client,message,str(p["_id"]))
-
-
 
 @Client.on_message(filters.private & filters.photo)
 async def premium_payment_screenshot_handler(client, message):
@@ -956,7 +947,7 @@ async def premium_payment_screenshot_document_handler(client, message):
         f"🧾 Order: <code>{claimed['order_id']}</code>\n"
         f"💰 Amount: ₹{claimed['amount_inr']:.2f}\n\n"
         f"⏳ Your screenshot is now <b>pending admin verification</b>. Premium will activate only after approval.",
-        parse_mode="HTML",
+        parse_mode=enums.ParseMode.HTML,
     )
     await _record_payment_history(claimed, "proof_submitted", details={"proof_type": "screenshot", "media_type": "document"})
     await _send_upi_review(

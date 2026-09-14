@@ -35,7 +35,7 @@ from database.gfilters_mdb import (
 )
 import logging
 from urllib.parse import quote_plus
-from .payment_system import plan_keyboard, show_plan_checkout, start_upi, start_crypto, start_crypto_order, start_stars, admin_payment_action, verify_crypto, _finish_crypto
+from .payment_system import plan_keyboard, show_plan_checkout, start_upi, start_crypto, start_crypto_order, start_stars, admin_payment_action, verify_crypto, _finish_crypto, submit_utr
 from .request_system import send_no_result_request, handle_request_callback
 from Deendayal_botz.util.file_properties import get_name, get_hash, get_media_file_size
 from database.config_db import mdb
@@ -131,6 +131,24 @@ async def pm_text(bot, message):
     if content.startswith(("/", "#")):
         return  
     try:
+        # UPI UTR proof must be handled before normal movie search. The old
+        # payment plugin used a broad private-text handler that matched every
+        # text message and could swallow movie searches. Keep proof handling
+        # inside the main PM router so normal searches always reach auto_filter.
+        try:
+            pending_utr = await mdb.db["premium_payments"].find_one(
+                {
+                    "user_id": user_id,
+                    "status": "awaiting_utr",
+                    "proof_mode": "utr",
+                },
+                sort=[("created_at", -1)],
+            )
+        except Exception:
+            pending_utr = None
+        if pending_utr:
+            return await submit_utr(bot, message, str(pending_utr["_id"]))
+
         await mdb.update_top_messages(user_id, content)
         # Direct PM movie-name search is always enabled. Users only need to
         # type the movie/series name; /search is not required.
@@ -962,19 +980,6 @@ async def cb_handler(client: Client, query: CallbackQuery):
     if query.data.startswith("paymethod_"):
         await show_plan_checkout(client, query, query.data.split("_", 1)[1])
         return await query.answer()
-
-    if query.data.startswith("payupi_"):
-        # Handle UPI as a terminal callback.  start_upi owns the callback answer
-        # so Telegram never receives a second answer for the same query.
-        try:
-            return await start_upi(client, query, query.data.split("_", 1)[1])
-        except Exception:
-            logger.exception("UPI payment callback failed")
-            try:
-                await query.answer("UPI checkout failed. Please try again.", show_alert=True)
-            except Exception:
-                pass
-            return
 
     if query.data.startswith("paycrypto_"):
         await start_crypto(client, query, query.data.split("_", 1)[1])
